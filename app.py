@@ -1436,4 +1436,3 @@ with tab1:
                             file_name=f"{selected_crop_predictor}_{selected_state_predictor}_forecast.csv",
                             mime="text/csv"
                         )
->>>>>>> dc91f9b (Initial commit)
