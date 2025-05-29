@@ -33,9 +33,11 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     offset = 0
     all_records = []
 
+    # Ensure 'DATES' is explicitly requested if it's the primary date column
     expected_api_columns = ['country', 'adm1_name', 'year', 'month', 'DATES'] + [f'c_{item}' for item in food_items]
     fields_param = ','.join(expected_api_columns)
 
+    st.info("Attempting to fetch data from World Bank API...")
     while True:
         params = {
             'limit': limit,
@@ -45,16 +47,23 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
         }
         try:
             response = requests.get(api_url, params=params, timeout=60)
-            response.raise_for_status()
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             data = response.json()
             if 'data' in data:
                 records = data['data']
                 if not records:
-                    break
+                    break # No more records to fetch
                 all_records.extend(records)
                 offset += limit
             else:
+                st.warning("API response does not contain 'data' key or is empty. Stopping fetch.")
                 break
+        except requests.exceptions.Timeout:
+            st.error("Request timed out. Please check your internet connection or try again later.")
+            break
+        except requests.exceptions.ConnectionError:
+            st.error("Network connection error. Please check your internet connection.")
+            break
         except requests.exceptions.RequestException as e:
             st.error(f"Failed to fetch data from World Bank API: {e}")
             break
@@ -64,32 +73,38 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
 
     df = pd.DataFrame(all_records)
     if df.empty:
+        st.warning("No data fetched from the API.")
         return pd.DataFrame()
 
+    # Convert 'year' and 'month' to numeric, coerce errors to NaN
     df['year'] = pd.to_numeric(df['year'], errors='coerce')
     df['month'] = pd.to_numeric(df['month'], errors='coerce')
 
+    # Handle 'DATES' column or create from 'year' and 'month'
     if 'DATES' in df.columns:
         df['DATES'] = pd.to_datetime(df['DATES'], errors='coerce')
         df.dropna(subset=['DATES', 'year', 'month'], inplace=True)
-        current_year = datetime.now().year
-        start_year = current_year - years_back
-        df = df[df['year'] >= start_year].copy()
     else:
-        current_year = datetime.now().year
-        start_year = current_year - years_back
-        df = df[df['year'] >= start_year].copy()
-        df.dropna(subset=['year', 'month'], inplace=True)
+        # Create 'DATES' from 'year' and 'month' if it's missing
+        df['DATES'] = pd.to_datetime(df['year'].astype(str) + '-' + df['month'].astype(str) + '-01', errors='coerce')
+        df.dropna(subset=['DATES', 'year', 'month'], inplace=True)
+        st.info("Created 'DATES' column from 'year' and 'month'.")
 
+    # Filter by years_back
+    current_year = datetime.now().year
+    start_year = current_year - years_back
+    df = df[df['year'] >= start_year].copy()
+
+    # Identify and convert price columns
     actual_price_columns_in_df = [col for col in [f'c_{item}' for item in food_items] if col in df.columns]
     if not actual_price_columns_in_df:
-        st.warning("No relevant food price columns found in the fetched World Bank data.")
+        st.warning("No relevant food price columns found in the fetched World Bank data. Please check `TARGET_FOOD_ITEMS`.")
         return pd.DataFrame()
 
     for col in actual_price_columns_in_df:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    df_clean = df.dropna(subset=actual_price_columns_in_df, how='all')
+    df_clean = df.dropna(subset=actual_price_columns_in_all_records, how='all')
 
     groupby_cols = ['country', 'adm1_name', 'year', 'month']
     if not all(col in df_clean.columns for col in groupby_cols):
@@ -98,7 +113,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
         return pd.DataFrame()
 
     df_avg = df_clean.groupby(groupby_cols)[actual_price_columns_in_df].mean().reset_index()
-    df_avg['unit'] = '100 KG'
+    df_avg['unit'] = '100 KG' # Assuming unit is consistent
     df_avg.rename(columns={col: col[2:].capitalize() for col in actual_price_columns_in_df}, inplace=True)
     df_avg.rename(columns={'year': 'Year', 'month': 'Month', 'unit': 'Unit'}, inplace=True)
 
@@ -119,7 +134,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     )
     df_long.rename(columns={'adm1_name': 'State'}, inplace=True)
     df_long = df_long[['State', 'Year', 'Month', 'Food_Item', 'Unit', 'Price']]
-    df_long = df_long[df_long['State'] != 'Market Average']
+    df_long = df_long[df_long['State'] != 'Market Average'] # Exclude 'Market Average' if it's not a state
     df_long.dropna(subset=['Price'], inplace=True)
     df_long.sort_values(by=['State', 'Year', 'Month', 'Food_Item'], inplace=True)
     df_long.reset_index(drop=True, inplace=True)
@@ -160,7 +175,7 @@ def load_and_prepare_data_for_app(food_items_list_lower, years_back=10):
     df_food_prices.sort_values(by=['State', 'Food_Item', 'Date'], inplace=True)
     df_food_prices.reset_index(drop=True, inplace=True)
 
-    return df_food_prices, df_food_prices
+    return df_food_prices, df_food_prices # Returning the same DataFrame for now, can be split later if needed
 
 # --- Prepare time series for LSTM (univariate national average) ---
 def prepare_national_average_time_series(df, food_item):
@@ -176,10 +191,11 @@ def prepare_national_average_time_series(df, food_item):
         st.warning(f"No data available for {food_item} to calculate national average.")
         return pd.Series(dtype='float64'), None
 
-    series = df_filtered_item.groupby('Date').Price.mean()
-    series = series.asfreq('MS') # Ensure monthly frequency
+    # Calculate national average and set frequency
+    series = df_filtered_item.groupby('Date').Price.mean().asfreq('MS')
 
-    series = series.fillna(method='ffill') # Fill missing values
+    # Interpolate missing values using 'ffill' and then 'bfill' to handle leading NaNs
+    series = series.fillna(method='ffill').fillna(method='bfill')
     series = series.clip(lower=0.01)       # Avoid zeros or negatives for scaling
 
     if series.empty or len(series) < 2:
@@ -208,7 +224,6 @@ def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_st
     Loads the appropriate LSTM model and generates univariate forecasts for national average prices.
     Expects scaled time series.
     """
-    # Construct model filename based on the specified convention
     model_filename = f"{food_item.capitalize()}_LSTM_model.keras"
     model_filepath = os.path.join(BEST_MODEL_DIR, model_filename)
 
@@ -229,30 +244,32 @@ def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_st
 
     # Determine sequence_length from the loaded model's input shape
     # LSTM input shape: (batch_size, sequence_length, num_features)
+    sequence_length = 1 # Default
     if model.input_shape and len(model.input_shape) >= 2:
         sequence_length = model.input_shape[1]
-    else:
-        st.error("Could not determine sequence length from model input shape. Assuming default of 12.")
-        sequence_length = 12 # Fallback
-
+    
     if ts_scaled.empty or len(ts_scaled) < sequence_length:
         st.warning(f"Insufficient historical data ({len(ts_scaled)} points) for national average {food_item} to generate an LSTM forecast with model's sequence length {sequence_length}. At least {sequence_length} points are required.")
         return pd.Series(dtype='float64'), None
 
+    # Use the last `sequence_length` data points for the initial prediction
     current_sequence = ts_scaled.iloc[-sequence_length:].values
-    
+
     forecast_values = []
     last_date = ts_scaled.index[-1]
 
     for i in range(forecast_steps):
+        # Reshape for LSTM input: (1, sequence_length, 1)
         input_sequence = current_sequence.reshape(1, sequence_length, 1)
         
         next_scaled_price = model.predict(input_sequence, verbose=0)[0][0]
         forecast_values.append(next_scaled_price)
 
+        # Update the sequence for the next prediction
         current_sequence = np.append(current_sequence[1:], next_scaled_price)
 
-    forecast_series_scaled = pd.Series(forecast_values, index=[last_date + pd.DateOffset(months=i) for i in range(1, forecast_steps + 1)])
+    forecast_index = [last_date + pd.DateOffset(months=i) for i in range(1, forecast_steps + 1)]
+    forecast_series_scaled = pd.Series(forecast_values, index=forecast_index)
     forecast_series_unscaled = pd.Series(scaler_price.inverse_transform(forecast_series_scaled.values.reshape(-1, 1)).flatten(), index=forecast_series_scaled.index)
 
     return forecast_series_unscaled, model_filename
@@ -262,22 +279,28 @@ st.sidebar.title("🧊 Filter Options")
 selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPITALIZED_FOOD_ITEMS, default=['Maize'], key="explorer_food_select")
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
 
+# Initialize session state variables
 if 'df_full_merged' not in st.session_state:
     st.session_state.df_full_merged = pd.DataFrame()
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 
 with st.sidebar:
-    if st.button("Load All Data", key="load_analyze_button") or not st.session_state.data_loaded:
+    # Use a consistent key for the button to avoid re-rendering issues
+    if st.button("Load All Data", key="load_data_button") or not st.session_state.data_loaded:
         all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
-        st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
-            all_food_items_lower, years_back=10
-        )
-        if not st.session_state.df_full_merged.empty:
-            st.session_state.data_loaded = True
-            st.success("Data loaded successfully! You can now explore and predict.")
+        # Only fetch data if not already loaded or explicitly requested
+        if not st.session_state.data_loaded or st.button("Reload Data", key="reload_data_button_hidden"): # Hidden reload button for programmatic use
+            st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
+                all_food_items_lower, years_back=10
+            )
+            if not st.session_state.df_full_merged.empty:
+                st.session_state.data_loaded = True
+                st.success("Data loaded successfully! You can now explore and predict.")
+            else:
+                st.error("Failed to load data. Please check your internet connection or file paths.")
         else:
-            st.error("Failed to load data. Please check your internet connection or file paths.")
+            st.info("Data already loaded. Click 'Reload Data' if you want to refetch.")
 
 # --- Main Page UI ---
 st.title("🥦 Nigerian Food Price Data Explorer & Predictor")
@@ -315,6 +338,7 @@ with tab1:
                 try:
                     available_map_items = food_data_explorer_filtered['Food_Item'].unique()
                     if selected_food_items_explorer and available_map_items.size > 0:
+                        # Ensure default selection for map is one of the available items
                         initial_map_item = next((item for item in selected_food_items_explorer if item in available_map_items), available_map_items[0])
                         map_item = st.selectbox("Select food item to map:", available_map_items, index=list(available_map_items).index(initial_map_item), key="map_food_select")
                     else:
@@ -480,7 +504,7 @@ with tab2:
                                 combined_plot_data,
                                 x='Date',
                                 y='Price',
-                                color='Data Type', # Now 'Data Type' column exists
+                                color='Data Type',
                                 title=f"Historical and Predicted National Average Price of {selected_food_item_predictor}",
                                 labels={'Price': 'Price (₦ per 100 KG)', 'Date': 'Date'}
                             )
