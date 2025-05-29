@@ -209,7 +209,7 @@ def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_st
     Expects scaled time series.
     """
     # Construct model filename based on the specified convention
-    model_filename = f"{food_item.lower()}_LSTM_model.keras"
+    model_filename = f"{food_item.capitalize()}_LSTM_model.keras"
     model_filepath = os.path.join(BEST_MODEL_DIR, model_filename)
 
     if not os.path.exists(model_filepath):
