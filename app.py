@@ -109,7 +109,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
 
     groupby_cols = ['country', 'adm1_name', 'year', 'month']
     if not all(col in df_clean.columns for col in groupby_cols):
-        missing_cols = [col for col in groupby_cols if col not in df_clean.columns]
+        missing_cols = [col for col in groupby_clean.columns if col not in df_clean.columns]
         st.error(f"Essential grouping columns missing after food price data fetch/clean: {missing_cols}. Check API fields and data schema.")
         return pd.DataFrame()
 
@@ -212,7 +212,7 @@ def prepare_national_average_time_series(df, food_item):
 
     # Interpolate missing values using 'ffill' and then 'bfill' to handle leading NaNs
     series = series.fillna(method='ffill').fillna(method='bfill')
-    series = series.clip(lower=0.01)       # Avoid zeros or negatives for scaling
+    series = series.clip(lower=0.01)        # Avoid zeros or negatives for scaling
 
     if series.empty or len(series) < 2:
         st.warning(f"Insufficient national average data for {food_item} to prepare time series for LSTM. Found {len(series)} data points.")
@@ -301,23 +301,17 @@ if 'df_full_merged' not in st.session_state:
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 
-with st.sidebar:
-    # Use a consistent key for the button to avoid re-rendering issues
-    if st.button("Load All Data", key="load_data_button") or not st.session_state.data_loaded:
-        all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
-        # Only fetch data if not already loaded or explicitly requested
-        # Changed the hidden reload button logic for clarity and direct loading
-        if not st.session_state.data_loaded or st.button("Force Reload Data", key="force_reload_data_button"): 
-            st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
-                all_food_items_lower, years_back=10
-            )
-            if not st.session_state.df_full_merged.empty:
-                st.session_state.data_loaded = True
-                st.success("Data loaded successfully! You can now explore and predict.")
-            else:
-                st.error("Failed to load data. Please check your internet connection or file paths.")
-        else:
-            st.info("Data already loaded. Click 'Force Reload Data' if you want to refetch.")
+# Automatically load data on first run if not already loaded
+if not st.session_state.data_loaded:
+    all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
+    st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
+        all_food_items_lower, years_back=10
+    )
+    if not st.session_state.df_full_merged.empty:
+        st.session_state.data_loaded = True
+        st.success("Data loaded successfully! You can now explore and predict.")
+    else:
+        st.error("Failed to load data. Please check your internet connection or file paths.")
 
 # --- Main Page UI ---
 st.title("🥦 Nigerian Food Price Data Explorer & Predictor")
@@ -451,7 +445,7 @@ with tab1:
                 key="download_explorer_data"
             )
     else:
-        st.info("Please click 'Load All Data' in the sidebar to start exploring.")
+        st.info("Data is being loaded or could not be loaded. Please check the status messages above.")
 
 # --- Predictor Tab ---
 with tab2:
@@ -475,7 +469,7 @@ with tab2:
             with col2:
                 forecast_months = st.slider("Forecast for (months):", min_value=1, max_value=24, value=6, key="forecast_months_slider")
 
-           if st.button("Generate National Average Forecast", key="generate_forecast_button"):
+            if st.button("Generate National Average Forecast", key="generate_forecast_button"):
                 if selected_food_item_predictor:
                     st.write(f"Generating national average forecast for **{selected_food_item_predictor}** for **{forecast_months}** months...")
 
@@ -516,9 +510,7 @@ with tab2:
                             
                             # Concatenate the two DataFrames
                             combined_plot_data = pd.concat([df_historical, df_forecast])
-                            # REMOVE THIS LINE: combined_plot_data.rename(columns={'index': 'Date'}, inplace=True) 
-                            # The 'Date' column is already correctly named from the reset_index calls.
-
+                            
                             fig_forecast = px.line(
                                 combined_plot_data,
                                 x='Date',
@@ -533,3 +525,5 @@ with tab2:
                             st.warning("No forecast generated. Check data and model availability.")
                 else:
                     st.warning("Please select a food item to generate a national average forecast.")
+    else:
+        st.info("Data is being loaded or could not be loaded. Please check the status messages above.")
