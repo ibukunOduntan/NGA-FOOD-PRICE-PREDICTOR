@@ -10,3 +10,4 @@ statsmodels
 joblib
 openpyxl
 plotly
+tensorflow
