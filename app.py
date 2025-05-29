@@ -611,4 +611,4 @@ with tab1:
             # Download CSV
             st.download_button(
                 label="📥 Download Explorer Data (CSV)",
-                data=food_data_explorer_filtered.to_csv(index
+                data=food_data_explorer_filtered.to_csv(index)
