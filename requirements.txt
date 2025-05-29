@@ -1,9 +1,10 @@
+numpy>=1.21.2 # Or the version you prefer
+scipy>=1.3.2  # Or the version you prefer
 streamlit
 pandas
 requests
-pmdarima
+pmdarima==2.0.4
 statsmodels
-numpy
 joblib
-openpyxl # This is usually needed for pd.read_excel
+openpyxl
 plotly
