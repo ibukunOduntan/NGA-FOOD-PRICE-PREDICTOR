@@ -225,11 +225,9 @@ def fetch_rainfall_data_from_api(state_coords, years_back=10):
 def load_geojson():
     """Loads the GeoJSON file for Nigeria states."""
     try:
-        if os.path.exists("ngs.json"):
-            filepath = "ngs.json"
-        elif os.path.exists("ngs.json"):
-            filepath = "ngs.json"
-        else:
+        # Assuming ngs.json is in the root directory for simplicity
+        filepath = "ngs.json"
+        if not os.path.exists(filepath):
             st.error("GeoJSON file 'ngs.json' not found. Please ensure it's in the root directory.")
             return None
 
@@ -262,12 +260,12 @@ def load_and_merge_all_data_directly(selected_food_items_lower, years_back):
         df_food_prices = fetch_food_prices_from_api(API_URL, TARGET_FOOD_ITEMS, 'Nigeria', years_back)
         if df_food_prices.empty:
             st.error("Failed to load food price data. Please check API connectivity and data availability.")
-            return None, None
+            return None, None, None
 
         df_inflation = load_inflation_data_from_file(INFLATION_FILEPATH)
         if df_inflation.empty:
             st.error("Failed to load inflation data. Please ensure 'Inflation_Data_in_Excel.xlsx' exists and is valid.")
-            return None, None
+            return None, None, None
 
         df_rainfall = fetch_rainfall_data_from_api(state_coords, years_back)
         if df_rainfall.empty:
@@ -286,12 +284,16 @@ def load_and_merge_all_data_directly(selected_food_items_lower, years_back):
         
         if df_final_merged.empty:
             st.error("Merged dataset is empty. Check individual data sources.")
-            return None, None
+            return None, None, None
+
+    # Prepare rainfall history for efficient passing to extend_exog_for_forecast
+    df_rainfall_history_for_forecast = df_final_merged[['State', 'Year', 'Month', 'rain']].drop_duplicates().rename(columns={'State': 'state'}).dropna(subset=['rain'])
         
-    return df_final_merged, df_food_prices
+    return df_final_merged, df_food_prices, df_rainfall_history_for_forecast
 
 # --- Helper function for extending exogenous variables for SARIMAX ---
-def extend_exog_for_forecast(exog, steps, selected_state, df_full_merged):
+# Changed to accept df_rainfall_history_for_forecast directly
+def extend_exog_for_forecast(exog, steps, selected_state, df_rainfall_history_for_forecast):
     """
     Extends exogenous variables (CPI and Rainfall) for the forecast horizon.
     Future CPI is based on known data; future Rainfall uses multi-year monthly average.
@@ -302,34 +304,37 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_full_merged):
     future_dates = pd.date_range(start=exog.index[-1] + pd.DateOffset(months=1), periods=steps, freq='MS')
 
     # --- Handling future CPI (foodYearOn) ---
-    # These are illustrative hardcoded future CPI values.
     # In a real scenario, you'd fetch or estimate these from a reliable source.
+    # For now, using hardcoded values, but ideally these would come from an API or a more robust estimation.
+    # Updated to be current year + next year for example.
+    current_year = datetime.now().year
     known_future_cpi_data = {
-        '2025-06-01': 24, # Next month (Current time is May 2025)
-        '2025-09-01': 24.5,
-        '2025-12-01': 25,
-        '2026-03-01': 25.5
+        f'{current_year}-06-01': 24.0, # June this year
+        f'{current_year}-09-01': 24.5, # September this year
+        f'{current_year}-12-01': 25.0, # December this year
+        f'{current_year+1}-03-01': 25.5 # March next year
     }
+
     known_future_cpi_series = pd.Series(known_future_cpi_data).astype(float)
     known_future_cpi_series.index = pd.to_datetime(known_future_cpi_series.index)
 
     future_cpi_filled = pd.Series(index=future_dates, dtype=float)
+    # Fill with known future values
     for date, value in known_future_cpi_series.items():
         if date in future_cpi_filled.index:
             future_cpi_filled.loc[date] = value
-    
+            
+    # If there are any NaNs left, forward fill from the last known value, then backward fill if start is NaN
     if not known_future_cpi_series.empty:
         last_known_cpi_value = known_future_cpi_series.iloc[-1]
     else:
         last_known_cpi_value = exog['foodYearOn'].iloc[-1] if 'foodYearOn' in exog.columns and not exog['foodYearOn'].empty else 0.0
     
-    future_cpi_filled = future_cpi_filled.fillna(method='bfill').fillna(method='ffill').fillna(last_known_cpi_value)
+    future_cpi_filled = future_cpi_filled.fillna(method='ffill').fillna(method='bfill').fillna(last_known_cpi_value)
     future_cpi = future_cpi_filled.values
 
     # --- Handling future Rainfall: Using multi-year monthly average (Pseudo-forecast) ---
-    # This section implements the pseudo-forecasting logic for rainfall as requested.
-    df_rainfall_history = df_full_merged[['State', 'Year', 'Month', 'rain']].drop_duplicates().rename(columns={'State': 'state'}).dropna(subset=['rain'])
-    monthly_avg_rain = get_historical_average_rainfall(selected_state, df_rainfall_history)
+    monthly_avg_rain = get_historical_average_rainfall(selected_state, df_rainfall_history_for_forecast)
 
     future_rain = np.full(steps, np.nan)
 
@@ -357,6 +362,7 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_full_merged):
     return future_exog
 
 # --- Prepare time series and exogenous variables for SARIMAX ---
+@st.cache_data(ttl=3600 * 24) # Cache the prepared time series data for 24 hours
 def prepare_time_series_with_exog(df, state_name, food_item):
     """
     Prepares the time series (Price) and exogenous variables (foodYearOn, rain)
@@ -397,17 +403,20 @@ def prepare_time_series_with_exog(df, state_name, food_item):
 
 # --- SARIMAX Forecasting Function ---
 @st.cache_resource(ttl=3600) # Cache the fitted model for 1 hour
-def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps, df_full_merged):
+def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps, df_rainfall_history_for_forecast):
     """
     Fits SARIMAX on full series with exogenous variables and forecasts
     the next forecast_steps months.
     Uses auto_arima to find the best SARIMAX order.
     """
-    with st.spinner(f"Fetching data and training model for {food_item} in {state_name}... please wait"):
+    with st.spinner(f"Training SARIMAX model for {food_item} in {state_name}... this may take a moment."):
         try:
-            model_auto = auto_arima(ts, exogenous=exog, seasonal=True, m=12, trace=False,
-                                    suppress_warnings=True, error_action='ignore', stepwise=True,
-                                    max_p=5, max_d=2, max_q=5, max_P=2, max_D=1, max_Q=2)
+            # Suppress auto_arima internal warnings during grid search
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model_auto = auto_arima(ts, exogenous=exog, seasonal=True, m=12, trace=False,
+                                        suppress_warnings=True, error_action='ignore', stepwise=True,
+                                        max_p=5, max_d=2, max_q=5, max_P=2, max_D=1, max_Q=2)
             order = model_auto.order
             seasonal_order = model_auto.seasonal_order
             st.info(f"Optimal SARIMAX order: {order}, Seasonal order: {seasonal_order}")
@@ -416,17 +425,22 @@ def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps
             model_fit = model.fit(disp=False)
 
         except Exception as e:
-            st.error(f"Error during SARIMAX model training: {e}")
-            return pd.Series(dtype='float64')
+            st.error(f"Error during SARIMAX model training for {food_item} in {state_name}: {e}")
+            return pd.Series(dtype='float64'), None # Return None for model_fit on failure
 
-        future_exog = extend_exog_for_forecast(exog, forecast_steps, state_name, df_full_merged)
+    # Only extend exog and forecast if model_fit was successful
+    if model_fit:
+        with st.spinner("Generating forecast..."):
+            future_exog = extend_exog_for_forecast(exog, forecast_steps, state_name, df_rainfall_history_for_forecast)
 
-        try:
-            forecast = model_fit.forecast(steps=forecast_steps, exog=future_exog)
-            return forecast
-        except Exception as e:
-            st.error(f"Error during SARIMAX forecast: {e}")
-            return pd.Series(dtype='float64')
+            try:
+                forecast = model_fit.forecast(steps=forecast_steps, exog=future_exog)
+                return forecast, model_fit # Return the fitted model as well, though not used immediately
+            except Exception as e:
+                st.error(f"Error during SARIMAX forecast generation: {e}")
+                return pd.Series(dtype='float64'), None
+    else:
+        return pd.Series(dtype='float64'), None
 
 # --- Streamlit App Setup ---
 st.sidebar.title("🧊 Filter Options")
@@ -435,18 +449,19 @@ selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPI
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
 
 # Initialize session state variables using .get() for robustness
-# No need to explicitly initialize if 'Load and Analyze Data' is the primary trigger
 if 'df_full_merged' not in st.session_state:
     st.session_state.df_full_merged = None
 if 'df_food_prices_for_explorer' not in st.session_state:
     st.session_state.df_food_prices_for_explorer = None
+if 'df_rainfall_history_for_forecast' not in st.session_state: # New session state for optimized rainfall history
+    st.session_state.df_rainfall_history_for_forecast = None
 
 # Add the "Load and Analyze Data" button to the sidebar
 with st.sidebar:
     if st.button("Load and Analyze Data", key="load_analyze_button"):
         # Pre-load all data by calling the direct fetching and merging function
         all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
-        st.session_state.df_full_merged, st.session_state.df_food_prices_for_explorer = load_and_merge_all_data_directly(
+        st.session_state.df_full_merged, st.session_state.df_food_prices_for_explorer, st.session_state.df_rainfall_history_for_forecast = load_and_merge_all_data_directly(
             all_food_items_lower, years_back=10 # Load a good range for both explorer and predictor
         )
         # After loading, the app will rerun, and the data will be available.
@@ -651,61 +666,51 @@ with tab2:
             st.markdown("---")
             st.subheader(f"Forecasting {selected_crop_predictor} Prices in {selected_state_predictor}")
 
+            # Prepare data (cached)
             ts, exog, series_data_for_viz = prepare_time_series_with_exog(st.session_state.df_full_merged, selected_state_predictor, selected_crop_predictor)
 
             if ts.empty or exog.empty:
-                st.warning(f"No complete historical data (price, inflation, or rainfall) available for {selected_crop_predictor} in {selected_state_predictor} after handling missing values. Please select another combination or check data.")
-            elif len(ts) < 24: # Require at least 2 years of monthly data for a reasonable SARIMA model
-                st.warning(f"Insufficient historical data ({len(ts)} data points) for {selected_crop_predictor} in {selected_state_predictor}. At least 24 months of data are recommended for reliable SARIMAX forecasting with seasonality.")
+                st.warning(f"No complete historical data (price, inflation, or rainfall) available for {selected_crop_predictor} in {selected_state_predictor} after handling missing values. Please select another combination or check data sources.")
             else:
-                # Perform forecasting
-                forecast_prices = forecast_food_prices_sarimax(ts, exog, selected_crop_predictor, selected_state_predictor, forecast_months, st.session_state.df_full_merged)
+                # Call cached forecasting function
+                forecast_values, fitted_model = forecast_food_prices_sarimax(
+                    ts, 
+                    exog, 
+                    selected_crop_predictor, 
+                    selected_state_predictor, 
+                    forecast_months,
+                    st.session_state.df_rainfall_history_for_forecast # Pass the pre-processed rainfall history
+                )
 
-                if not forecast_prices.empty:
-                    # Combine historical and forecasted data for visualization
-                    forecast_dates = pd.date_range(start=ts.index[-1] + pd.DateOffset(months=1), periods=forecast_months, freq='MS')
-                    
+                if not forecast_values.empty:
+                    # Create forecast DataFrame
                     forecast_df = pd.DataFrame({
-                        'Date': forecast_dates,
-                        'Price': forecast_prices.values,
+                        'Date': forecast_values.index,
+                        'Price': forecast_values.values,
                         'Type': 'Forecast'
                     })
 
-                    historical_df = pd.DataFrame({
-                        'Date': ts.index,
-                        'Price': ts.values,
-                        'Type': 'Historical'
-                    })
-                    
-                    combined_df = pd.concat([historical_df, forecast_df]).reset_index(drop=True)
-                    
-                    # Plotting
-                    fig_forecast = px.line(
-                        combined_df, 
-                        x='Date', 
-                        y='Price', 
-                        color='Type', 
-                        title=f"Historical and Forecasted Price of {selected_crop_predictor} in {selected_state_predictor}",
-                        labels={"Price": "Price (₦ per 100 KG)", "Date": "Date", "Type": "Data Type"},
-                        color_discrete_map={'Historical': 'blue', 'Forecast': 'red'}
-                    )
-                    fig_forecast.update_traces(mode='lines+markers', marker=dict(size=4))
-                    st.plotly_chart(fig_forecast, use_container_width=True)
+                    # Prepare historical data for plotting
+                    historical_df = series_data_for_viz[['Price']].copy()
+                    historical_df['Date'] = historical_df.index
+                    historical_df['Type'] = 'Historical'
 
-                    st.markdown("#### 🔮 Forecasted Prices")
-                    # Display the forecasted prices in a table
-                    forecast_display_df = forecast_df.copy()
-                    forecast_display_df['Date'] = forecast_display_df['Date'].dt.strftime('%Y-%m')
-                    forecast_display_df.rename(columns={'Date': 'Month-Year', 'Price': 'Forecasted Price (₦/100KG)'}, inplace=True)
-                    st.dataframe(forecast_display_df, hide_index=True, use_container_width=True)
+                    # Combine for plotting
+                    combined_df = pd.concat([historical_df, forecast_df])
+                    combined_df.sort_values('Date', inplace=True)
 
-                    # Provide download option for forecast
-                    st.download_button(
-                        label="📥 Download Forecast (CSV)",
-                        data=forecast_display_df.to_csv(index=False).encode('utf-8'),
-                        file_name=f"{selected_crop_predictor}_{selected_state_predictor}_forecast.csv",
-                        mime="text/csv",
-                        key="download_forecast_button"
-                    )
+                    fig = px.line(combined_df, x='Date', y='Price', color='Type',
+                                  title=f'{selected_crop_predictor} Price Forecast in {selected_state_predictor}',
+                                  labels={'Price': 'Price (₦/100KG)', 'Date': 'Date'})
+                    fig.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    st.subheader("Forecasted Prices:")
+                    st.dataframe(forecast_df.set_index('Date').style.format({'Price': '₦{:,.2f}'}), use_container_width=True)
+
+                    # Display model summary (optional, but good for understanding)
+                    if fitted_model:
+                        with st.expander("View Model Summary"):
+                            st.write(fitted_model.summary())
                 else:
-                    st.error("Failed to generate forecast. Please check data availability and model training messages.")
+                    st.error("Forecast could not be generated. Please check for errors in the logs above.")
