@@ -1,5 +1,7 @@
-numpy>=1.21.2 # Or the version you prefer
-scipy>=1.3.2  # Or the version you prefer
+# requirements.txt
+numpy==2.2.6  # Or a compatible version that works with your Python 3.13.3
+scipy==1.15.3 # Or a compatible version
+
 streamlit
 pandas
 requests
