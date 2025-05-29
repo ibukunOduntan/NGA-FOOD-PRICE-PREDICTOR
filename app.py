@@ -463,24 +463,24 @@ with tab2:
                                 df_for_prediction_base['Food_Item'] == selected_food_item_predictor
                             ].groupby('Date').Price.mean().asfreq('MS').fillna(method='ffill').clip(lower=0.01)
 
-                            historical_data_national_avg.name = 'Historical National Avg. Price'
-                            forecast_unscaled.name = 'Predicted National Avg. Price'
+                            # Create DataFrames with a 'Data Type' column
+                            df_historical = historical_data_national_avg.to_frame(name='Price')
+                            df_historical['Data Type'] = 'Historical National Avg. Price'
+                            df_historical.reset_index(inplace=True)
 
-                            combined_plot_data = pd.concat([historical_data_national_avg, forecast_unscaled]).reset_index()
-                            combined_plot_data.rename(columns={'index': 'Date', 0:'Price'}, inplace=True) 
-
-                            combined_plot_data_melted = combined_plot_data.melt(
-                                id_vars=['Date'],
-                                value_vars=[historical_data_national_avg.name, forecast_unscaled.name],
-                                var_name='Data Type',
-                                value_name='Price'
-                            )
+                            df_forecast = forecast_unscaled.to_frame(name='Price')
+                            df_forecast['Data Type'] = 'Predicted National Avg. Price'
+                            df_forecast.reset_index(inplace=True)
                             
+                            # Concatenate the two DataFrames
+                            combined_plot_data = pd.concat([df_historical, df_forecast])
+                            combined_plot_data.rename(columns={'index': 'Date'}, inplace=True) # Rename 'index' if it exists from reset_index
+
                             fig_forecast = px.line(
-                                combined_plot_data_melted,
+                                combined_plot_data,
                                 x='Date',
                                 y='Price',
-                                color='Data Type',
+                                color='Data Type', # Now 'Data Type' column exists
                                 title=f"Historical and Predicted National Average Price of {selected_food_item_predictor}",
                                 labels={'Price': 'Price (₦ per 100 KG)', 'Date': 'Date'}
                             )
