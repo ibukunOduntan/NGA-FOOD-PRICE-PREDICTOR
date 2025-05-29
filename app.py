@@ -98,7 +98,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     # Identify and convert price columns
     actual_price_columns_in_df = [col for col in [f'c_{item}' for item in food_items] if col in df.columns]
     if not actual_price_columns_in_df:
-        st.warning("No relevant food price columns found in the fetched World Bank data. Please check `TARGET_FOOD_ITEMS`.")
+        st.warning("No relevant food price columns found in the fetched World Bank data. Please check TARGET_FOOD_ITEMS.")
         return pd.DataFrame()
 
     for col in actual_price_columns_in_df:
@@ -116,7 +116,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     df_avg = df_clean.groupby(groupby_cols)[actual_price_columns_in_df].mean().reset_index()
     df_avg['unit'] = '100 KG' # Assuming unit is consistent
 
-    # Create a mapping for renaming. This will be used to create the `value_vars` list for melt.
+    # Create a mapping for renaming. This will be used to create the value_vars list for melt.
     rename_for_melt = {col: col[2:].capitalize() for col in actual_price_columns_in_df}
     
     # Rename the columns in df_avg BEFORE melting
@@ -191,7 +191,57 @@ def load_and_prepare_data_for_app(food_items_list_lower, years_back=10):
     df_food_prices.sort_values(by=['State', 'Food_Item', 'Date'], inplace=True)
     df_food_prices.reset_index(drop=True, inplace=True)
 
-    return df_food_prices, df_food_prices # Returning the same DataFrame for now, can be split later if needed
+    # For the predictor, we need national average prices
+    df_national_avg_prices = df_food_prices.groupby(['Date', 'Food_Item'])['Price'].mean().reset_index()
+    df_national_avg_prices.sort_values(by=['Food_Item', 'Date'], inplace=True)
+
+    return df_food_prices, df_national_avg_prices
+
+# --- Prediction Functions ---
+
+@st.cache_resource
+def load_prediction_model(food_item_capitalized):
+    """Loads the pre-trained Keras model for the given food item."""
+    model_name = f"{food_item_capitalized}_LSTM_model.keras"
+    model_path = os.path.join(BEST_MODEL_DIR, model_name)
+    if not os.path.exists(model_path):
+        st.error(f"Model file not found for {food_item_capitalized}: {model_path}. Please ensure models are trained and saved correctly.")
+        return None
+    try:
+        model = load_model(model_path)
+        return model
+    except Exception as e:
+        st.error(f"Error loading model {model_name}: {e}")
+        return None
+
+def create_sequences(data, sequence_length):
+    """Creates sequences for LSTM input."""
+    xs = []
+    for i in range(len(data) - sequence_length):
+        x = data[i:(i + sequence_length), 0]
+        xs.append(x)
+    return np.array(xs)
+
+def forecast_prices(model, scaler, historical_prices_scaled, num_months_to_forecast, sequence_length=12):
+    """
+    Forecasts future prices using the loaded LSTM model.
+    """
+    if historical_prices_scaled.shape[0] < sequence_length:
+        st.warning(f"Not enough historical data ({historical_prices_scaled.shape[0]} months) to create a sequence of length {sequence_length}. Cannot forecast.")
+        return np.array([]), np.array([])
+
+    current_sequence = historical_prices_scaled[-sequence_length:].reshape(1, sequence_length, 1)
+    
+    predicted_prices_scaled = []
+    for _ in range(num_months_to_forecast):
+        next_price_scaled = model.predict(current_sequence, verbose=0)[0, 0]
+        predicted_prices_scaled.append(next_price_scaled)
+        # Update the sequence: remove the first element, add the predicted element
+        current_sequence = np.append(current_sequence[:, 1:, :], [[next_price_scaled]], axis=1)
+
+    predicted_prices = scaler.inverse_transform(np.array(predicted_prices_scaled).reshape(-1, 1))
+    return predicted_prices.flatten()
+
 
 # --- Streamlit App Setup ---
 st.sidebar.title("🧊 Filter Options")
@@ -201,6 +251,8 @@ years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=
 # Initialize session state variables
 if 'df_full_merged' not in st.session_state:
     st.session_state.df_full_merged = pd.DataFrame()
+if 'df_national_avg' not in st.session_state:
+    st.session_state.df_national_avg = pd.DataFrame()
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 
@@ -208,10 +260,10 @@ if 'data_loaded' not in st.session_state:
 if not st.session_state.data_loaded:
     all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
     with st.sidebar: # Messages should be in the sidebar
-        st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
+        st.session_state.df_full_merged, st.session_state.df_national_avg = load_and_prepare_data_for_app(
             all_food_items_lower, years_back=10
         )
-        if not st.session_state.df_full_merged.empty:
+        if not st.session_state.df_full_merged.empty and not st.session_state.df_national_avg.empty:
             st.session_state.data_loaded = True
             st.success("Data loaded successfully! You can now explore.")
         else:
@@ -352,6 +404,100 @@ with tab1:
 
 # --- Predictor Tab ---
 with tab2:
-    st.markdown("This tab was previously for forecasting future national average food prices.")
-    st.markdown("Its functionality has been removed as per your request.")
-    st.markdown("Currently, there is no prediction logic implemented here.")
+    st.markdown("Forecast future national average food prices using pre-trained LSTM models.")
+
+    if st.session_state.data_loaded and not st.session_state.df_national_avg.empty:
+        # User input for prediction
+        food_item_to_forecast = st.selectbox(
+            "Select Food Item to Forecast:",
+            CAPITALIZED_FOOD_ITEMS,
+            key="predictor_food_select"
+        )
+        num_months_to_forecast = st.slider(
+            "Number of Months to Forecast:",
+            min_value=1,
+            max_value=12,
+            value=3,
+            key="predictor_months_slider"
+        )
+
+        if st.button("Generate Forecast", key="generate_forecast_button"):
+            # Load the model
+            model = load_prediction_model(food_item_to_forecast)
+
+            if model:
+                # Prepare data for prediction
+                df_item_national_avg = st.session_state.df_national_avg[
+                    st.session_state.df_national_avg['Food_Item'] == food_item_to_forecast
+                ].copy()
+
+                if df_item_national_avg.empty:
+                    st.warning(f"No historical national average data found for {food_item_to_forecast}. Cannot make predictions.")
+                else:
+                    # Sort by date to ensure correct sequence
+                    df_item_national_avg = df_item_national_avg.sort_values(by='Date')
+                    
+                    # Use a MinMaxScaler fit on the historical data
+                    scaler = MinMaxScaler(feature_range=(0, 1))
+                    
+                    # Reshape for scaler (needs 2D array)
+                    historical_prices = df_item_national_avg['Price'].values.reshape(-1, 1)
+                    
+                    # Fit and transform the historical data
+                    historical_prices_scaled = scaler.fit_transform(historical_prices)
+
+                    # Determine sequence length from the model's input shape
+                    # The input shape of the LSTM is typically (batch_size, sequence_length, features)
+                    # We need the sequence_length (the second dimension)
+                    try:
+                        sequence_length = model.input_shape[1]
+                    except IndexError:
+                        st.error("Could not determine sequence length from model input shape. Ensure your model is correctly loaded.")
+                        sequence_length = 12 # Default to 12 if shape can't be inferred
+
+                    if historical_prices_scaled.shape[0] < sequence_length:
+                        st.warning(f"Not enough historical data ({historical_prices_scaled.shape[0]} months) to create a sequence of length {sequence_length} for {food_item_to_forecast}. Need at least {sequence_length} months of data to start forecasting.")
+                    else:
+                        # Generate forecasts
+                        with st.spinner(f"Forecasting prices for {food_item_to_forecast}..."):
+                            predicted_prices = forecast_prices(
+                                model, scaler, historical_prices_scaled, num_months_to_forecast, sequence_length
+                            )
+                        
+                        # Create future dates for the forecast
+                        last_historical_date = df_item_national_avg['Date'].max()
+                        future_dates = [last_historical_date + timedelta(days=30 * i) for i in range(1, num_months_to_forecast + 1)]
+                        
+                        df_predictions = pd.DataFrame({
+                            'Date': future_dates,
+                            'Food_Item': food_item_to_forecast,
+                            'Price': predicted_prices,
+                            'Type': 'Forecast'
+                        })
+
+                        df_historical = df_item_national_avg.copy()
+                        df_historical['Type'] = 'Historical'
+
+                        df_combined = pd.concat([df_historical, df_predictions])
+
+                        fig_forecast = px.line(
+                            df_combined,
+                            x='Date',
+                            y='Price',
+                            color='Type',
+                            title=f"National Average Price Forecast for {food_item_to_forecast}",
+                            labels={"Price": "Price (₦ per 100 KG)", "Date": "Date", "Type": "Data Type"},
+                            line_dash='Type' # Differentiate historical and forecast lines
+                        )
+                        fig_forecast.update_traces(
+                            selector=dict(name='Forecast'),
+                            line=dict(color='red', dash='dot') # Make forecast line red and dotted
+                        )
+                        st.plotly_chart(fig_forecast, use_container_width=True)
+
+                        st.markdown("#### 📈 Forecasted Prices")
+                        st.dataframe(df_predictions[['Date', 'Price']].style.format({"Price": "₦{:,.2f}"}))
+            else:
+                st.warning("Please select a valid food item and ensure its model is available.")
+    else:
+        st.info("Data is being loaded. Please wait or check the messages in the sidebar.")
