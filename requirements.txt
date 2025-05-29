@@ -1,0 +1,9 @@
+streamlit
+pandas
+requests
+pmdarima
+statsmodels
+numpy
+joblib
+openpyxl # This is usually needed for pd.read_excel
+plotly
