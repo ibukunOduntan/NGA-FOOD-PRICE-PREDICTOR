@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timedelta
 import joblib # Still needed for model saving/loading if we re-introduce it, but removed for now
 
+st.set_page_config(layout="wide", page_title="Nigerian Food Price Dashboard")
+
 # Suppress specific warnings from statsmodels and pandas
 warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
@@ -431,8 +433,6 @@ def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps
             return pd.Series(dtype='float64')
 
 # --- Streamlit App Setup ---
-st.set_page_config(layout="wide", page_title="Nigerian Food Price Dashboard")
-
 # --- Sidebar UI ---
 st.sidebar.title("🧊 Filter Options")
 selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPITALIZED_FOOD_ITEMS, default=['Maize'])
@@ -1150,7 +1150,6 @@ def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps
             return pd.Series(dtype='float64')
 
 # --- Streamlit App Setup ---
-st.set_page_config(layout="wide", page_title="Nigerian Food Price Dashboard")
 
 # --- Sidebar UI ---
 st.sidebar.title("🧊 Filter Options")
