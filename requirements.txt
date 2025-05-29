@@ -1,11 +1,11 @@
 # requirements.txt
 numpy==2.2.6  # Or a compatible version that works with your Python 3.13.3
 scipy==1.15.3 # Or a compatible version
+pmdarima===1.8.5
 
 streamlit
 pandas
 requests
-pmdarima==2.0.4
 statsmodels
 joblib
 openpyxl
