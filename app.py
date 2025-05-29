@@ -225,12 +225,12 @@ def fetch_rainfall_data_from_api(state_coords, years_back=10):
 def load_geojson():
     """Loads the GeoJSON file for Nigeria states."""
     try:
-        if os.path.exists("nga/ngs.json"):
-            filepath = "nga/ngs.json"
+        if os.path.exists("ngs.json"):
+            filepath = "ngs.json"
         elif os.path.exists("ngs.json"):
             filepath = "ngs.json"
         else:
-            st.error("GeoJSON file 'ngs.json' not found. Please ensure it's in 'nga/' or the root directory.")
+            st.error("GeoJSON file 'ngs.json' not found. Please ensure it's in the root directory.")
             return None
 
         with open(filepath, "r") as f:
