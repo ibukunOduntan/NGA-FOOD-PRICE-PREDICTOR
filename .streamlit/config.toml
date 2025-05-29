@@ -1,0 +1,3 @@
+# .streamlit/config.toml
+[compatibility]
+pythonVersion = "3.10" # Or "3.11", or "3.12"
