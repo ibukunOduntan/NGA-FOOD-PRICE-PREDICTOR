@@ -519,7 +519,13 @@ with tab2:
                                 title=f"Historical and Predicted National Average Price of {selected_food_item_predictor}",
                                 labels={'Price': 'Price (₦ per 100 KG)', 'Date': 'Date'}
                             )
-                            fig_forecast.add_vline(x=historical_data_national_avg.index.max(), line_dash="dash", line_color="gray", annotation_text="Forecast Start")
+                            # FIX: Convert the Timestamp to a string for add_vline
+                            fig_forecast.add_vline(
+                                x=historical_data_national_avg.index.max().strftime('%Y-%m-%d'), # Convert to string
+                                line_dash="dash",
+                                line_color="gray",
+                                annotation_text="Forecast Start"
+                            )
                             st.plotly_chart(fig_forecast, use_container_width=True)
                         else:
                             st.warning("No forecast generated. Check data and model availability.")
