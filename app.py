@@ -475,7 +475,7 @@ with tab2:
             with col2:
                 forecast_months = st.slider("Forecast for (months):", min_value=1, max_value=24, value=6, key="forecast_months_slider")
 
-            if st.button("Generate National Average Forecast", key="generate_forecast_button"):
+           if st.button("Generate National Average Forecast", key="generate_forecast_button"):
                 if selected_food_item_predictor:
                     st.write(f"Generating national average forecast for **{selected_food_item_predictor}** for **{forecast_months}** months...")
 
@@ -508,15 +508,16 @@ with tab2:
                             # Create DataFrames with a 'Data Type' column
                             df_historical = historical_data_national_avg.to_frame(name='Price')
                             df_historical['Data Type'] = 'Historical National Avg. Price'
-                            df_historical.reset_index(inplace=True)
+                            df_historical.reset_index(inplace=True) # 'Date' index becomes 'Date' column here
 
                             df_forecast = forecast_unscaled.to_frame(name='Price')
                             df_forecast['Data Type'] = 'Predicted National Avg. Price'
-                            df_forecast.reset_index(inplace=True)
+                            df_forecast.reset_index(inplace=True) # 'Date' index becomes 'Date' column here
                             
                             # Concatenate the two DataFrames
                             combined_plot_data = pd.concat([df_historical, df_forecast])
-                            combined_plot_data.rename(columns={'index': 'Date'}, inplace=True) # Rename 'index' if it exists from reset_index
+                            # REMOVE THIS LINE: combined_plot_data.rename(columns={'index': 'Date'}, inplace=True) 
+                            # The 'Date' column is already correctly named from the reset_index calls.
 
                             fig_forecast = px.line(
                                 combined_plot_data,
@@ -532,5 +533,3 @@ with tab2:
                             st.warning("No forecast generated. Check data and model availability.")
                 else:
                     st.warning("Please select a food item to generate a national average forecast.")
-    else:
-        st.info("Please click 'Load All Data' in the sidebar to enable the predictor.")
