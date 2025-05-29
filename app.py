@@ -1153,7 +1153,12 @@ def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps
 
 # --- Sidebar UI ---
 st.sidebar.title("🧊 Filter Options")
-selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPITALIZED_FOOD_ITEMS, default=['Maize'])
+selected_food_items_explorer = st.sidebar.multiselect(
+    "Select Food Items:", 
+    CAPITALIZED_FOOD_ITEMS, 
+    default=['Maize'], 
+    key="food_items_explorer_multiselect" # <--- Add a unique key here
+)
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5)
 
 # Initialize session state variables using .get() for robustness
