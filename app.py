@@ -611,4 +611,101 @@ with tab1:
             # Download CSV
             st.download_button(
                 label="📥 Download Explorer Data (CSV)",
-                data=food_data_explorer_filtered.to_csv(index)
+                data=food_data_explorer_filtered.to_csv(index=False).encode('utf-8'),
+                file_name="nigeria_food_prices_explorer.csv",
+                mime="text/csv",
+                key="download_explorer_data"
+            )
+    else:
+        st.info("No data available for display. Please set your filter options in the side bar and click 'Load and Analyze Data'.")
+
+
+# --- Predictor Tab ---
+with tab2:
+    st.header("📈 Food Price Predictor")
+    st.markdown("Forecast future food prices based on historical data, inflation, and rainfall.")
+    st.markdown("""Data sources:
+                Historical prices: World Bank API,
+                Rainfall: Open Meteo archives,
+                Food Inflation (foodYearOn): National Bureau of Statistics
+                """)
+
+
+    if st.session_state.df_full_merged is None or st.session_state.df_full_merged.empty:
+        st.warning("No data available for prediction. Click 'Load and Analyze Data' in the sidebar to begin fetching and displaying the data.")
+    else:
+        # User inputs for Prediction
+        st.subheader("Prediction Settings")
+
+        unique_states_predictor = sorted(st.session_state.df_full_merged['State'].unique().tolist())
+        selected_state_predictor = st.selectbox("Select State", unique_states_predictor, key="predictor_state_select")
+
+        available_food_items_predictor = sorted(
+            st.session_state.df_full_merged[st.session_state.df_full_merged['State'] == selected_state_predictor]['Food_Item'].unique().tolist()
+        )
+        selected_crop_predictor = st.selectbox("Select Crop", available_food_items_predictor, key="predictor_crop_select")
+
+        forecast_months = st.slider("Number of Months to Forecast (Max 12)", 1, 12, 3, key="forecast_months_slider")
+
+        if st.button("Generate Price Forecast", key="generate_forecast_button"):
+            st.markdown("---")
+            st.subheader(f"Forecasting {selected_crop_predictor} Prices in {selected_state_predictor}")
+
+            ts, exog, series_data_for_viz = prepare_time_series_with_exog(st.session_state.df_full_merged, selected_state_predictor, selected_crop_predictor)
+
+            if ts.empty or exog.empty:
+                st.warning(f"No complete historical data (price, inflation, or rainfall) available for {selected_crop_predictor} in {selected_state_predictor} after handling missing values. Please select another combination or check data.")
+            elif len(ts) < 24: # Require at least 2 years of monthly data for a reasonable SARIMA model
+                st.warning(f"Insufficient historical data ({len(ts)} data points) for {selected_crop_predictor} in {selected_state_predictor}. At least 24 months of data are recommended for reliable SARIMAX forecasting with seasonality.")
+            else:
+                # Perform forecasting
+                forecast_prices = forecast_food_prices_sarimax(ts, exog, selected_crop_predictor, selected_state_predictor, forecast_months, st.session_state.df_full_merged)
+
+                if not forecast_prices.empty:
+                    # Combine historical and forecasted data for visualization
+                    forecast_dates = pd.date_range(start=ts.index[-1] + pd.DateOffset(months=1), periods=forecast_months, freq='MS')
+                    
+                    forecast_df = pd.DataFrame({
+                        'Date': forecast_dates,
+                        'Price': forecast_prices.values,
+                        'Type': 'Forecast'
+                    })
+
+                    historical_df = pd.DataFrame({
+                        'Date': ts.index,
+                        'Price': ts.values,
+                        'Type': 'Historical'
+                    })
+                    
+                    combined_df = pd.concat([historical_df, forecast_df]).reset_index(drop=True)
+                    
+                    # Plotting
+                    fig_forecast = px.line(
+                        combined_df, 
+                        x='Date', 
+                        y='Price', 
+                        color='Type', 
+                        title=f"Historical and Forecasted Price of {selected_crop_predictor} in {selected_state_predictor}",
+                        labels={"Price": "Price (₦ per 100 KG)", "Date": "Date", "Type": "Data Type"},
+                        color_discrete_map={'Historical': 'blue', 'Forecast': 'red'}
+                    )
+                    fig_forecast.update_traces(mode='lines+markers', marker=dict(size=4))
+                    st.plotly_chart(fig_forecast, use_container_width=True)
+
+                    st.markdown("#### 🔮 Forecasted Prices")
+                    # Display the forecasted prices in a table
+                    forecast_display_df = forecast_df.copy()
+                    forecast_display_df['Date'] = forecast_display_df['Date'].dt.strftime('%Y-%m')
+                    forecast_display_df.rename(columns={'Date': 'Month-Year', 'Price': 'Forecasted Price (₦/100KG)'}, inplace=True)
+                    st.dataframe(forecast_display_df, hide_index=True, use_container_width=True)
+
+                    # Provide download option for forecast
+                    st.download_button(
+                        label="📥 Download Forecast (CSV)",
+                        data=forecast_display_df.to_csv(index=False).encode('utf-8'),
+                        file_name=f"{selected_crop_predictor}_{selected_state_predictor}_forecast.csv",
+                        mime="text/csv",
+                        key="download_forecast_button"
+                    )
+                else:
+                    st.error("Failed to generate forecast. Please check data availability and model training messages.")
