@@ -104,7 +104,8 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     for col in actual_price_columns_in_df:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    df_clean = df.dropna(subset=actual_price_columns_in_all_records, how='all')
+    # FIX: Use 'actual_price_columns_in_df' instead of 'actual_price_columns_in_all_records'
+    df_clean = df.dropna(subset=actual_price_columns_in_df, how='all')
 
     groupby_cols = ['country', 'adm1_name', 'year', 'month']
     if not all(col in df_clean.columns for col in groupby_cols):
@@ -114,7 +115,10 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
 
     df_avg = df_clean.groupby(groupby_cols)[actual_price_columns_in_df].mean().reset_index()
     df_avg['unit'] = '100 KG' # Assuming unit is consistent
-    df_avg.rename(columns={col: col[2:].capitalize() for col in actual_price_columns_in_df}, inplace=True)
+
+    # Create a mapping for renaming, ensuring no clash with 'Price'
+    rename_mapping = {col: col[2:].capitalize() for col in actual_price_columns_in_df}
+    df_avg.rename(columns=rename_mapping, inplace=True)
     df_avg.rename(columns={'year': 'Year', 'month': 'Month', 'unit': 'Unit'}, inplace=True)
 
     if 'country' in df_avg.columns:
@@ -126,9 +130,14 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
         st.error(f"Columns for melting (id_vars) missing in food prices: {missing_cols}. Check previous renames or API fields.")
         return pd.DataFrame()
 
+    # FIX: Explicitly define value_vars for pd.melt to avoid conflicts
+    # The columns that contain the actual price values, which have now been renamed
+    value_vars_for_melt = [rename_mapping[col] for col in actual_price_columns_in_df]
+
     df_long = pd.melt(
         df_avg,
         id_vars=id_vars_for_melt,
+        value_vars=value_vars_for_melt, # Specify which columns to unpivot
         var_name='Food_Item',
         value_name='Price'
     )
@@ -140,7 +149,6 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     df_long.reset_index(drop=True, inplace=True)
     
     return df_long
-
 
 @st.cache_data(ttl=3600 * 24)
 def load_geojson():
