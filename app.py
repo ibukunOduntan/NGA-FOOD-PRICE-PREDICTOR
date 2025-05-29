@@ -333,9 +333,10 @@ with tab1:
     st.markdown("This tab lets you analyze food price trends, map data, and download cleaned datasets.")
 
     if st.session_state.data_loaded and not st.session_state.df_full_merged.empty:
+        # app.py, line 338
         food_data_explorer_filtered = st.session_state.df_full_merged[
             (st.session_state.df_full_merged['Food_Item'].isin(selected_food_items_explorer)) &
-            (st.session_session['df_full_merged']['Year'] >= (datetime.now().year - years_back_explorer))
+            (st.session_state['df_full_merged']['Year'] >= (datetime.now().year - years_back_explorer))
         ].copy()
         
         if food_data_explorer_filtered.empty:
