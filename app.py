@@ -8,15 +8,15 @@ import os
 from datetime import datetime, timedelta
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model # Explicitly import load_model
-import streamlit as st # Assuming streamlit is imported as st, which is common
+from tensorflow.keras.models import load_model
+import streamlit as st
 
 st.set_page_config(layout="wide", page_title="Nigerian Food Price Dashboard")
 
 # Suppress specific warnings from statsmodels and pandas
 warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
-warnings.filterwarnings("ignore", category=DeprecationWarning) # Suppress pmdarima deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # --- Global Configurations / Data Sources ---
 API_URL = "https://microdata.worldbank.org/index.php/api/tables/data/fcv/wld_2021_rtfp_v02_m"
@@ -26,14 +26,13 @@ BEST_MODEL_DIR = 'best_food_price_models' # Directory where .kera models are sav
 
 # --- Functions to Fetch Data from External Sources (APIs, Files) ---
 
-@st.cache_data(ttl=3600 * 24) # Cache the result of this API call for 24 hours
+@st.cache_data(ttl=3600 * 24)
 def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_back=10):
     """Fetches food price data from the World Bank API and returns a DataFrame."""
     limit = 10000
     offset = 0
     all_records = []
 
-    # Use a more explicit list of expected columns for robustness
     expected_api_columns = ['country', 'adm1_name', 'year', 'month', 'DATES'] + [f'c_{item}' for item in food_items]
     fields_param = ','.join(expected_api_columns)
 
@@ -45,7 +44,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
             'fields': fields_param
         }
         try:
-            response = requests.get(api_url, params=params, timeout=60) # Increased timeout
+            response = requests.get(api_url, params=params, timeout=60)
             response.raise_for_status()
             data = response.json()
             if 'data' in data:
@@ -82,7 +81,6 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
         df = df[df['year'] >= start_year].copy()
         df.dropna(subset=['year', 'month'], inplace=True)
 
-    # Filter for food items that actually exist in the fetched data's columns
     actual_price_columns_in_df = [col for col in [f'c_{item}' for item in food_items] if col in df.columns]
     if not actual_price_columns_in_df:
         st.warning("No relevant food price columns found in the fetched World Bank data.")
@@ -129,7 +127,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     return df_long
 
 
-@st.cache_data(ttl=3600 * 24) # Cache for 24 hours
+@st.cache_data(ttl=3600 * 24)
 def load_geojson():
     """Loads the GeoJSON file for Nigeria states."""
     try:
@@ -158,15 +156,11 @@ def load_and_prepare_data_for_app(food_items_list_lower, years_back=10):
         st.error("Failed to load food price data.")
         return pd.DataFrame(), pd.DataFrame()
 
-    # Create a Date column for time series indexing and plotting
     df_food_prices['Date'] = pd.to_datetime(df_food_prices['Year'].astype(str) + '-' + df_food_prices['Month'].astype(str) + '-01')
-    
-    # Sort for time series consistency
     df_food_prices.sort_values(by=['State', 'Food_Item', 'Date'], inplace=True)
     df_food_prices.reset_index(drop=True, inplace=True)
 
-    return df_food_prices, df_food_prices # df_food_prices will serve as df_food_prices_raw and the base for national avg calculation
-
+    return df_food_prices, df_food_prices
 
 # --- Prepare time series for LSTM (univariate national average) ---
 def prepare_national_average_time_series(df, food_item):
@@ -182,39 +176,24 @@ def prepare_national_average_time_series(df, food_item):
         st.warning(f"No data available for {food_item} to calculate national average.")
         return pd.Series(dtype='float64'), None
 
-    # Calculate national average price for the food item
-    # Group by Date and take mean across all states
     series = df_filtered_item.groupby('Date').Price.mean()
     series = series.asfreq('MS') # Ensure monthly frequency
 
-    # Handle missing or non-positive values
     series = series.fillna(method='ffill') # Fill missing values
     series = series.clip(lower=0.01)       # Avoid zeros or negatives for scaling
 
-    if series.empty or len(series) < 2: # Need at least 2 data points for training
+    if series.empty or len(series) < 2:
         st.warning(f"Insufficient national average data for {food_item} to prepare time series for LSTM. Found {len(series)} data points.")
         return pd.Series(dtype='float64'), None
 
-    # Scale the target variable (Price)
     scaler_price = MinMaxScaler(feature_range=(0, 1))
     ts_scaled = pd.Series(scaler_price.fit_transform(series.values.reshape(-1, 1)).flatten(), index=series.index)
     
-    # Store scaler in session state
     st.session_state[f'scaler_price_{food_item}'] = scaler_price
 
     return ts_scaled, scaler_price
 
-def create_sequences(data, sequence_length):
-    xs, ys = [], []
-    for i in range(len(data) - sequence_length):
-        x = data[i:(i + sequence_length)]
-        y = data[i + sequence_length]
-        xs.append(x)
-        ys.append(y)
-    return np.array(xs), np.array(ys)
-
-
-@st.cache_resource(hash_funcs={tf.keras.Model: lambda _: None}) # Cache the loaded Keras model
+@st.cache_resource(hash_funcs={tf.keras.Model: lambda _: None})
 def load_lstm_model(model_filepath):
     """Loads a pre-trained LSTM model from a .kera file."""
     try:
@@ -224,13 +203,13 @@ def load_lstm_model(model_filepath):
         st.error(f"Error loading LSTM model from {model_filepath}: {e}")
         return None
 
-
-def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_steps, sequence_length=12):
+def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_steps):
     """
     Loads the appropriate LSTM model and generates univariate forecasts for national average prices.
     Expects scaled time series.
     """
-    model_filename = f"lstm_model_{food_item.lower()}.kera" # Model name is now only food_item specific
+    # Construct model filename based on the specified convention
+    model_filename = f"{food_item.lower()}_LSTM_model.keras"
     model_filepath = os.path.join(BEST_MODEL_DIR, model_filename)
 
     if not os.path.exists(model_filepath):
@@ -243,38 +222,36 @@ def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_st
     
     st.info(f"Using LSTM model: {model_filename}")
     
-    # Retrieve the price scaler to inverse transform the predictions
-    scaler_price = st.session_state.get(f'scaler_price_{food_item}') # Scaler key is now only food_item specific
+    scaler_price = st.session_state.get(f'scaler_price_{food_item}')
     if scaler_price is None:
-        st.error("Price scaler not found in session state. Cannot inverse transform forecast.")
+        st.error("Price scaler not found in session state. Cannot inverse transform forecast. Please ensure data is loaded and prepared first.")
         return pd.Series(dtype='float64'), None
+
+    # Determine sequence_length from the loaded model's input shape
+    # LSTM input shape: (batch_size, sequence_length, num_features)
+    if model.input_shape and len(model.input_shape) >= 2:
+        sequence_length = model.input_shape[1]
+    else:
+        st.error("Could not determine sequence length from model input shape. Assuming default of 12.")
+        sequence_length = 12 # Fallback
 
     if ts_scaled.empty or len(ts_scaled) < sequence_length:
-        st.warning(f"Insufficient historical data for national average {food_item} to generate an LSTM forecast with sequence length {sequence_length}.")
+        st.warning(f"Insufficient historical data ({len(ts_scaled)} points) for national average {food_item} to generate an LSTM forecast with model's sequence length {sequence_length}. At least {sequence_length} points are required.")
         return pd.Series(dtype='float64'), None
 
-    # Prepare initial input for prediction
-    # LSTM expects input shape: (batch_size, sequence_length, num_features)
-    # For univariate, num_features is 1
     current_sequence = ts_scaled.iloc[-sequence_length:].values
     
     forecast_values = []
     last_date = ts_scaled.index[-1]
 
-    # Predict step-by-step
     for i in range(forecast_steps):
-        # Reshape for LSTM input: (1, sequence_length, 1)
         input_sequence = current_sequence.reshape(1, sequence_length, 1)
         
-        # Predict the next step
-        next_scaled_price = model.predict(input_sequence, verbose=0)[0][0] # Assuming single output LSTM
+        next_scaled_price = model.predict(input_sequence, verbose=0)[0][0]
         forecast_values.append(next_scaled_price)
 
-        # Update current_sequence for the next prediction by adding the predicted value
-        # and removing the oldest one
         current_sequence = np.append(current_sequence[1:], next_scaled_price)
 
-    # Inverse transform the forecast values
     forecast_series_scaled = pd.Series(forecast_values, index=[last_date + pd.DateOffset(months=i) for i in range(1, forecast_steps + 1)])
     forecast_series_unscaled = pd.Series(scaler_price.inverse_transform(forecast_series_scaled.values.reshape(-1, 1)).flatten(), index=forecast_series_scaled.index)
 
@@ -282,24 +259,19 @@ def forecast_national_average_food_prices_lstm(ts_scaled, food_item, forecast_st
 
 # --- Streamlit App Setup ---
 st.sidebar.title("🧊 Filter Options")
-# Assign unique keys to multiselect and slider in the sidebar
 selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPITALIZED_FOOD_ITEMS, default=['Maize'], key="explorer_food_select")
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
 
-# Initialize session state variables using .get() for robustness
-# These now store the *full* loaded datasets.
-if 'df_full_merged' not in st.session_state: # This will hold the raw data for explorer
+if 'df_full_merged' not in st.session_state:
     st.session_state.df_full_merged = pd.DataFrame()
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 
-# Add the "Load and Analyze Data" button to the sidebar
 with st.sidebar:
     if st.button("Load All Data", key="load_analyze_button") or not st.session_state.data_loaded:
-        # Pre-load all data by calling the direct fetching and merging function
         all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
-        st.session_state.df_full_merged, _ = load_and_prepare_data_for_app( # Only need df_food_prices_raw now
-            all_food_items_lower, years_back=10 # Load a good range for both explorer and predictor
+        st.session_state.df_full_merged, _ = load_and_prepare_data_for_app(
+            all_food_items_lower, years_back=10
         )
         if not st.session_state.df_full_merged.empty:
             st.session_state.data_loaded = True
@@ -313,7 +285,6 @@ st.markdown("""
 Welcome to the interactive dashboard to explore food price trends across Nigerian states and predict future national average prices.
 """)
 
-# Always display tabs
 tab1, tab2 = st.tabs(["📊 Data Explorer", "🧠 Predictor"])
 
 # --- Data Explorer Tab ---
@@ -322,23 +293,14 @@ with tab1:
     st.markdown("This tab lets you analyze food price trends, map data, and download cleaned datasets.")
 
     if st.session_state.data_loaded and not st.session_state.df_full_merged.empty:
-        # Filter the full loaded data based on sidebar selections for explorer
-        # Operate on df_full_merged as it's cleaner for explorer charts
         food_data_explorer_filtered = st.session_state.df_full_merged[
             (st.session_state.df_full_merged['Food_Item'].isin(selected_food_items_explorer)) &
             (st.session_state.df_full_merged['Year'] >= (datetime.now().year - years_back_explorer))
         ].copy()
         
-        # Ensure 'Date' column is present for plotting in explorer.
-        # It's good to create it once after initial data load if possible,
-        # but here it's recalculated on filtered data to avoid issues.
-        # This was already done in load_and_prepare_data_for_app, but good to be explicit here
-        # food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered['Year'].astype(str) + '-' + food_data_explorer_filtered['Month'].astype(str) + '-01')
-
         if food_data_explorer_filtered.empty:
             st.info("No data available for the selected food items and years in the explorer. Try adjusting filters.")
         else:
-            # Data Quality Info
             st.markdown("#### 📊 Data Quality Check")
             st.markdown("This section helps you assess the completeness and reliability of the dataset.")
             total = len(food_data_explorer_filtered)
@@ -346,7 +308,6 @@ with tab1:
             zero_price = (food_data_explorer_filtered['Price'] == 0).sum()
             st.info(f"Missing prices: {missing_price} | Zero prices: {zero_price} | Total entries: {total}")
 
-            # Choropleth Map
             st.markdown("#### 🗺️ Choropleth Map")
             st.markdown("Visualize average food prices by state using a color-coded map.")
             nigeria_geojson = load_geojson()
@@ -374,7 +335,6 @@ with tab1:
             else:
                 st.warning("Map cannot be displayed as GeoJSON data is missing.")
 
-            # --- National Average Price Trends by Food Item ---
             st.markdown("#### 📉 National Average Price Trends by Food Item")
             st.markdown("Shows average monthly trends across all states for each selected food item.")
 
@@ -403,7 +363,6 @@ with tab1:
             else:
                 st.info("No food items available for national trend analysis.")
 
-            # --- Food Price Trends Within a Selected State ---
             st.markdown("#### 📌 Food Price Trends Within a Selected State")
             st.markdown("Compare the price movement of all selected food items within a specific state.")
             
@@ -432,7 +391,6 @@ with tab1:
             else:
                 st.info("No states available for food price trend analysis.")
 
-            # --- Raw Data Display and Download ---
             st.markdown("#### ⬇️ Raw Data Table and Download")
             st.markdown("View the filtered raw data and download it as a CSV.")
             
@@ -455,7 +413,7 @@ with tab1:
 
 # --- Predictor Tab ---
 with tab2:
-    st.markdown("This tab allows you to forecast future national average food prices using trained LSTM models.")
+    st.markdown("This tab allows you to forecast future national average food prices using pre-trained LSTM models.")
 
     if st.session_state.data_loaded and not st.session_state.df_full_merged.empty:
         df_for_prediction_base = st.session_state.df_full_merged.copy()
@@ -477,9 +435,9 @@ with tab2:
 
             if st.button("Generate National Average Forecast", key="generate_forecast_button"):
                 if selected_food_item_predictor:
-                    st.write(f"Generating national average forecast for {selected_food_item_predictor} for {forecast_months} months...")
+                    st.write(f"Generating national average forecast for **{selected_food_item_predictor}** for **{forecast_months}** months...")
 
-                    # Prepare national average time series
+                    # Prepare national average time series for scaling
                     ts_scaled, scaler_price = prepare_national_average_time_series(
                         df_for_prediction_base,
                         selected_food_item_predictor
@@ -501,7 +459,6 @@ with tab2:
                             st.dataframe(forecast_unscaled.to_frame(name='Predicted National Avg. Price (₦)'))
 
                             # Combine historical data and forecast for plotting
-                            # Re-calculate the national average historical data to ensure consistency
                             historical_data_national_avg = df_for_prediction_base[
                                 df_for_prediction_base['Food_Item'] == selected_food_item_predictor
                             ].groupby('Date').Price.mean().asfreq('MS').fillna(method='ffill').clip(lower=0.01)
@@ -509,21 +466,15 @@ with tab2:
                             historical_data_national_avg.name = 'Historical National Avg. Price'
                             forecast_unscaled.name = 'Predicted National Avg. Price'
 
-                            # Create a combined DataFrame for plotting
                             combined_plot_data = pd.concat([historical_data_national_avg, forecast_unscaled]).reset_index()
-                            combined_plot_data.rename(columns={'index': 'Date', 0:'Price'}, inplace=True) # Rename the value column to 'Price'
+                            combined_plot_data.rename(columns={'index': 'Date', 0:'Price'}, inplace=True) 
 
-                            # Melt the DataFrame for plotting with Plotly Express
                             combined_plot_data_melted = combined_plot_data.melt(
                                 id_vars=['Date'],
                                 value_vars=[historical_data_national_avg.name, forecast_unscaled.name],
                                 var_name='Data Type',
                                 value_name='Price'
                             )
-                            
-                            # Add a 'Type' column for differentiation in plot (optional, as 'Data Type' from melt does this)
-                            # combined_plot_data_melted['Type'] = 'Historical'
-                            # combined_plot_data_melted.loc[combined_plot_data_melted['Date'] >= forecast_unscaled.index.min(), 'Type'] = 'Forecast'
                             
                             fig_forecast = px.line(
                                 combined_plot_data_melted,
