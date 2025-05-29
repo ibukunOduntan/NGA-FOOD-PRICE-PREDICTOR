@@ -703,7 +703,7 @@ with tab1:
                         fig_forecast = px.line(
                             plot_data, x='Date', y='Value', color='Metric',
                             title=f"Historical and Predicted {selected_crop_predictor} Prices in {selected_state_predictor}",
-                            labels={'Value': 'Price (₦ per 100 KG)', 'Date': 'Date', 'Metric': 'Data Type'}
+                            labels ={'Value': 'Price (₦ per 100 KG)', 'Date': 'Date', 'Metric': 'Data Type'}
                         )
                         fig_forecast.update_layout(hovermode="x unified")
                         st.plotly_chart(fig_forecast, use_container_width=True)
@@ -715,9 +715,8 @@ with tab1:
                             label="📥 Download Forecast Data (CSV)",
                             data=forecast_df.to_csv().encode('utf-8'),
                             file_name=f"{selected_crop_predictor}_{selected_state_predictor}_forecast.csv",
-                            mime="text/csv"
+                            mime ="text/csv"
                         )
-=======
 import streamlit as st
 import pandas as pd
 import requests
