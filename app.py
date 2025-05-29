@@ -9,7 +9,8 @@ import numpy as np
 import warnings
 import os
 from datetime import datetime, timedelta
-import joblib # Still needed for model saving/loading if we re-introduce it, but removed for now
+# joblib is not strictly needed if we are caching models with st.cache_resource
+# import joblib
 
 st.set_page_config(layout="wide", page_title="Nigerian Food Price Dashboard")
 
@@ -50,9 +51,9 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
     offset = 0
     all_records = []
 
-    close_price_columns = [f'c_{item}' for item in food_items]
-    desired_api_fields = ['country', 'adm1_name', 'year', 'month', 'DATES'] + close_price_columns
-    fields_param = ','.join(desired_api_fields)
+    # Use a more explicit list of expected columns for robustness
+    expected_api_columns = ['country', 'adm1_name', 'year', 'month', 'DATES'] + [f'c_{item}' for item in food_items]
+    fields_param = ','.join(expected_api_columns)
 
     while True:
         params = {
@@ -99,8 +100,10 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
         df = df[df['year'] >= start_year].copy()
         df.dropna(subset=['year', 'month'], inplace=True)
 
-    actual_price_columns_in_df = [col for col in close_price_columns if col in df.columns]
+    # Filter for food items that actually exist in the fetched data's columns
+    actual_price_columns_in_df = [col for col in [f'c_{item}' for item in food_items] if col in df.columns]
     if not actual_price_columns_in_df:
+        st.warning("No relevant food price columns found in the fetched World Bank data.")
         return pd.DataFrame()
 
     for col in actual_price_columns_in_df:
@@ -170,8 +173,9 @@ def fetch_rainfall_data_from_api(state_coords, years_back=10):
     all_rainfall_data = []
     
     total_states = len(state_coords)
-    progress_bar = st.progress(0)
-    state_count = 0
+    # Removing progress bar from cached function, as it would only show on first run.
+    # If progress feedback is critical, this function might need to be run outside cache
+    # or progress feedback moved to the calling function.
 
     for state, coords in state_coords.items():
         lat, lon = coords
@@ -207,14 +211,12 @@ def fetch_rainfall_data_from_api(state_coords, years_back=10):
             else:
                 pass # Keep pass to avoid breaking flow if no data
         except requests.exceptions.RequestException as e:
+            # St.error inside a cached function will only show on the first run of the cache.
+            # Consider returning an error flag or logging for broader visibility.
             st.error(f"Failed to fetch rainfall data for {state}: {e}")
         except json.JSONDecodeError as e:
             st.error(f"Failed to decode JSON for rainfall data for {state}: {e}")
         
-        state_count += 1
-        progress_bar.progress(state_count / total_states)
-    
-    progress_bar.empty()
     if all_rainfall_data:
         df_rainfall = pd.concat(all_rainfall_data, ignore_index=True)
         return df_rainfall
@@ -225,7 +227,6 @@ def fetch_rainfall_data_from_api(state_coords, years_back=10):
 def load_geojson():
     """Loads the GeoJSON file for Nigeria states."""
     try:
-        # Assuming ngs.json is in the root directory for simplicity
         filepath = "ngs.json"
         if not os.path.exists(filepath):
             st.error("GeoJSON file 'ngs.json' not found. Please ensure it's in the root directory.")
@@ -237,6 +238,8 @@ def load_geojson():
         st.error(f"Error loading GeoJSON: {e}")
         return None
 
+# No caching for this, as its input `df_rainfall_history` could be large and change
+# based on the overall merged data for the prediction tab.
 def get_historical_average_rainfall(state, df_rainfall_history):
     """
     Calculates the multi-year monthly average rainfall for a given state.
@@ -250,27 +253,28 @@ def get_historical_average_rainfall(state, df_rainfall_history):
 
 
 @st.cache_data(ttl=3600 * 24) # Cache the final merged dataset for 24 hours
-def load_and_merge_all_data_directly(selected_food_items_lower, years_back):
+def load_and_merge_all_data_directly(target_food_items_lower, years_back):
     """
     Fetches food price, inflation, and rainfall data directly from external sources
     and merges them. This function is cached.
     """
-    # Consolidated spinner for data loading with the fun message
-    with st.spinner("Data ready for exploration! Dive in! 🎉"):
-        df_food_prices = fetch_food_prices_from_api(API_URL, TARGET_FOOD_ITEMS, 'Nigeria', years_back)
+    with st.spinner("Loading and preparing data... this might take a moment. 🎉"):
+        df_food_prices = fetch_food_prices_from_api(API_URL, target_food_items_lower, 'Nigeria', years_back)
         if df_food_prices.empty:
             st.error("Failed to load food price data. Please check API connectivity and data availability.")
-            return None, None, None
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame() # Return empty DFs
 
         df_inflation = load_inflation_data_from_file(INFLATION_FILEPATH)
         if df_inflation.empty:
             st.error("Failed to load inflation data. Please ensure 'Inflation_Data_in_Excel.xlsx' exists and is valid.")
-            return None, None, None
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame() # Return empty DFs
 
         df_rainfall = fetch_rainfall_data_from_api(state_coords, years_back)
         if df_rainfall.empty:
             # Create an empty DataFrame with expected columns to prevent merge errors
             df_rainfall = pd.DataFrame(columns=['state', 'Year', 'Month', 'rain'])
+            st.warning("Failed to load rainfall data. Rainfall data might be missing in predictions.")
+
 
         df_merged = df_food_prices.merge(df_inflation, on=['Year', 'Month'], how='left')
         df_final_merged = df_merged.merge(
@@ -281,13 +285,18 @@ def load_and_merge_all_data_directly(selected_food_items_lower, years_back):
         )
         if 'state' in df_final_merged.columns:
             df_final_merged.drop(columns=['state'], inplace=True)
-        
+            
+        # Convert date columns to a single datetime format for easier indexing later
+        df_final_merged['Date'] = pd.to_datetime(df_final_merged['Year'].astype(str) + '-' + df_final_merged['Month'].astype(str) + '-01')
+
         if df_final_merged.empty:
             st.error("Merged dataset is empty. Check individual data sources.")
-            return None, None, None
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # Prepare rainfall history for efficient passing to extend_exog_for_forecast
-    df_rainfall_history_for_forecast = df_final_merged[['State', 'Year', 'Month', 'rain']].drop_duplicates().rename(columns={'State': 'state'}).dropna(subset=['rain'])
+    # Ensure this is derived from the FULL merged data, not filtered data, to provide
+    # the most comprehensive historical average.
+    df_rainfall_history_for_forecast = df_rainfall[['state', 'Year', 'Month', 'rain']].drop_duplicates().dropna(subset=['rain'])
         
     return df_final_merged, df_food_prices, df_rainfall_history_for_forecast
 
@@ -306,15 +315,17 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_rainfall_history_fo
     # --- Handling future CPI (foodYearOn) ---
     # In a real scenario, you'd fetch or estimate these from a reliable source.
     # For now, using hardcoded values, but ideally these would come from an API or a more robust estimation.
-    # Updated to be current year + next year for example.
     current_year = datetime.now().year
     known_future_cpi_data = {
         f'{current_year}-06-01': 24.0, # June this year
         f'{current_year}-09-01': 24.5, # September this year
         f'{current_year}-12-01': 25.0, # December this year
-        f'{current_year+1}-03-01': 25.5 # March next year
+        f'{current_year+1}-03-01': 25.5, # March next year
+        f'{current_year+1}-06-01': 26.0, # June next year
+        f'{current_year+1}-09-01': 26.5, # September next year
+        f'{current_year+1}-12-01': 27.0, # December next year
     }
-
+    
     known_future_cpi_series = pd.Series(known_future_cpi_data).astype(float)
     known_future_cpi_series.index = pd.to_datetime(known_future_cpi_series.index)
 
@@ -325,12 +336,18 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_rainfall_history_fo
             future_cpi_filled.loc[date] = value
             
     # If there are any NaNs left, forward fill from the last known value, then backward fill if start is NaN
+    # Fallback to the last historical CPI value if no known future CPI is available or the dates don't align.
     if not known_future_cpi_series.empty:
-        last_known_cpi_value = known_future_cpi_series.iloc[-1]
-    else:
-        last_known_cpi_value = exog['foodYearOn'].iloc[-1] if 'foodYearOn' in exog.columns and not exog['foodYearOn'].empty else 0.0
+        # Extend the future_cpi_filled index to include known_future_cpi_series for proper ffill/bfill
+        combined_index = future_dates.union(known_future_cpi_series.index)
+        temp_cpi_series = known_future_cpi_series.reindex(combined_index)
+        temp_cpi_series = temp_cpi_series.fillna(method='ffill').fillna(method='bfill')
+        future_cpi_filled = temp_cpi_series.reindex(future_dates)
     
-    future_cpi_filled = future_cpi_filled.fillna(method='ffill').fillna(method='bfill').fillna(last_known_cpi_value)
+    if future_cpi_filled.isnull().any():
+        last_known_cpi_value = exog['foodYearOn'].iloc[-1] if 'foodYearOn' in exog.columns and not exog['foodYearOn'].empty else 0.0
+        future_cpi_filled = future_cpi_filled.fillna(last_known_cpi_value)
+
     future_cpi = future_cpi_filled.values
 
     # --- Handling future Rainfall: Using multi-year monthly average (Pseudo-forecast) ---
@@ -349,7 +366,7 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_rainfall_history_fo
                 last_historical_rain = exog['rain'].iloc[-1]
                 future_rain = np.nan_to_num(future_rain, nan=last_historical_rain)
             else:
-                future_rain = np.nan_to_num(future_rain, nan=0.0)
+                future_rain = np.nan_to_num(future_rain, nan=0.0) # Fallback if no historical rain
     else:
         last_historical_rain_fallback = exog['rain'].iloc[-1] if 'rain' in exog.columns and not exog['rain'].empty else 0.0
         future_rain = np.full(steps, last_historical_rain_fallback)
@@ -359,10 +376,15 @@ def extend_exog_for_forecast(exog, steps, selected_state, df_rainfall_history_fo
         'rain': future_rain
     }, index=future_dates)
 
+    # Ensure column order matches training exog
+    future_exog = future_exog[exog.columns] # Reorder to match the original exog columns
+
     return future_exog
 
 # --- Prepare time series and exogenous variables for SARIMAX ---
-@st.cache_data(ttl=3600 * 24) # Cache the prepared time series data for 24 hours
+# This function's output depends on the filters, so it cannot be strictly cached with st.cache_data
+# based on only df, state_name, food_item if df itself is filtered within the session.
+# However, the processing steps within it are usually fast once df is available.
 def prepare_time_series_with_exog(df, state_name, food_item):
     """
     Prepares the time series (Price) and exogenous variables (foodYearOn, rain)
@@ -377,8 +399,7 @@ def prepare_time_series_with_exog(df, state_name, food_item):
     if series_data.empty:
         return pd.Series(dtype='float64'), pd.DataFrame(), pd.DataFrame()
 
-    series_data['Date'] = pd.to_datetime(series_data['Year'].astype(str) + '-' + series_data['Month'].astype(str) + '-01')
-    series_data.set_index('Date', inplace=True)
+    series_data.set_index('Date', inplace=True) # Date column already created in load_and_merge_all_data_directly
     series_data.sort_index(inplace=True)
 
     # Ensure all required columns exist before attempting to fillna
@@ -402,16 +423,34 @@ def prepare_time_series_with_exog(df, state_name, food_item):
     return ts, exog, series_data
 
 # --- SARIMAX Forecasting Function ---
+# Use st.cache_resource for the model, as it's a computationally expensive object
 @st.cache_resource(ttl=3600) # Cache the fitted model for 1 hour
-def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps, df_rainfall_history_for_forecast):
+def get_and_fit_sarimax_model(ts_hash, exog_hash, food_item, state_name):
     """
-    Fits SARIMAX on full series with exogenous variables and forecasts
-    the next forecast_steps months.
-    Uses auto_arima to find the best SARIMAX order.
+    Helper function to fit SARIMAX model, intended to be cached.
+    Takes hashes of ts and exog to ensure caching works when actual series change.
     """
+    # Reconstruct ts and exog from st.session_state based on hashes if needed
+    # (This part requires careful state management if you want to be truly robust
+    # with caching based on content. For simplicity, we'll assume ts and exog
+    # passed to the calling forecast_food_prices_sarimax are consistent.)
+    
+    # IMPORTANT: The actual ts and exog values MUST be passed to the outer
+    # forecast_food_prices_sarimax function and then directly to this function
+    # for caching to work correctly based on their content (or their hashes).
+    # Since `st.cache_resource` is for the *return value* of the function,
+    # and ts/exog are potentially large, we should pass unique identifiers
+    # or hashes if the underlying data *could* be large and change often.
+    # For now, let's assume `ts` and `exog` are directly used as cache keys.
+    
+    # The actual ts and exog should be retrieved or passed from the context where
+    # get_and_fit_sarimax_model is called.
+    # For now, let's assume they are directly passed as arguments.
+    ts = st.session_state[f'ts_{food_item}_{state_name}']
+    exog = st.session_state[f'exog_{food_item}_{state_name}']
+
     with st.spinner(f"Training SARIMAX model for {food_item} in {state_name}... this may take a moment."):
         try:
-            # Suppress auto_arima internal warnings during grid search
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 model_auto = auto_arima(ts, exogenous=exog, seasonal=True, m=12, trace=False,
@@ -423,24 +462,51 @@ def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps
 
             model = SARIMAX(ts, exog=exog, order=order, seasonal_order=seasonal_order)
             model_fit = model.fit(disp=False)
-
+            return model_fit, order, seasonal_order
         except Exception as e:
             st.error(f"Error during SARIMAX model training for {food_item} in {state_name}: {e}")
-            return pd.Series(dtype='float64'), None # Return None for model_fit on failure
+            return None, None, None
 
-    # Only extend exog and forecast if model_fit was successful
+def forecast_food_prices_sarimax(ts, exog, food_item, state_name, forecast_steps, df_rainfall_history_for_forecast):
+    """
+    Fits SARIMAX on full series with exogenous variables and forecasts
+    the next forecast_steps months.
+    Uses auto_arima to find the best SARIMAX order.
+    """
+    if ts.empty or exog.empty:
+        st.warning(f"Insufficient data for {food_item} in {state_name} to generate a forecast.")
+        return pd.Series(dtype='float64')
+
+    # Store ts and exog in session state so get_and_fit_sarimax_model can access them.
+    # This is a workaround if the objects themselves are too large to be direct cache keys.
+    # More robust would be to hash their content.
+    st.session_state[f'ts_{food_item}_{state_name}'] = ts
+    st.session_state[f'exog_{food_item}_{state_name}'] = exog
+
+    # Using dummy hashes for caching, the real caching is done by the values of
+    # ts and exog themselves (or by unique identifiers derived from them).
+    # For st.cache_resource, the arguments themselves become part of the cache key.
+    # If ts and exog are large pandas objects, Streamlit will hash their content.
+    model_fit, order, seasonal_order = get_and_fit_sarimax_model(ts, exog, food_item, state_name)
+
     if model_fit:
         with st.spinner("Generating forecast..."):
             future_exog = extend_exog_for_forecast(exog, forecast_steps, state_name, df_rainfall_history_for_forecast)
+            
+            # Ensure future_exog has the same columns and order as the exog used for fitting
+            if not exog.empty and not future_exog.empty and list(exog.columns) != list(future_exog.columns):
+                st.warning("Future exogenous variables columns do not match training columns. Reordering.")
+                future_exog = future_exog[exog.columns]
+
 
             try:
                 forecast = model_fit.forecast(steps=forecast_steps, exog=future_exog)
-                return forecast, model_fit # Return the fitted model as well, though not used immediately
+                return forecast
             except Exception as e:
                 st.error(f"Error during SARIMAX forecast generation: {e}")
-                return pd.Series(dtype='float64'), None
+                return pd.Series(dtype='float64')
     else:
-        return pd.Series(dtype='float64'), None
+        return pd.Series(dtype='float64')
 
 # --- Streamlit App Setup ---
 st.sidebar.title("🧊 Filter Options")
@@ -449,22 +515,29 @@ selected_food_items_explorer = st.sidebar.multiselect("Select Food Items:", CAPI
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
 
 # Initialize session state variables using .get() for robustness
+# These now store the *full* loaded datasets.
 if 'df_full_merged' not in st.session_state:
-    st.session_state.df_full_merged = None
-if 'df_food_prices_for_explorer' not in st.session_state:
-    st.session_state.df_food_prices_for_explorer = None
-if 'df_rainfall_history_for_forecast' not in st.session_state: # New session state for optimized rainfall history
-    st.session_state.df_rainfall_history_for_forecast = None
+    st.session_state.df_full_merged = pd.DataFrame()
+if 'df_food_prices_raw' not in st.session_state: # This will hold the output of fetch_food_prices_from_api
+    st.session_state.df_food_prices_raw = pd.DataFrame()
+if 'df_rainfall_history_for_forecast' not in st.session_state:
+    st.session_state.df_rainfall_history_for_forecast = pd.DataFrame()
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
 
 # Add the "Load and Analyze Data" button to the sidebar
 with st.sidebar:
-    if st.button("Load and Analyze Data", key="load_analyze_button"):
+    if st.button("Load All Data", key="load_analyze_button") or not st.session_state.data_loaded:
         # Pre-load all data by calling the direct fetching and merging function
         all_food_items_lower = [item.lower() for item in TARGET_FOOD_ITEMS]
-        st.session_state.df_full_merged, st.session_state.df_food_prices_for_explorer, st.session_state.df_rainfall_history_for_forecast = load_and_merge_all_data_directly(
+        st.session_state.df_full_merged, st.session_state.df_food_prices_raw, st.session_state.df_rainfall_history_for_forecast = load_and_merge_all_data_directly(
             all_food_items_lower, years_back=10 # Load a good range for both explorer and predictor
         )
-        # After loading, the app will rerun, and the data will be available.
+        if not st.session_state.df_full_merged.empty:
+            st.session_state.data_loaded = True
+            st.success("Data loaded successfully! You can now explore and predict.")
+        else:
+            st.error("Failed to load data. Please check your internet connection or file paths.")
 
 # --- Main Page UI ---
 st.title("🥦 Nigerian Food Price Data Explorer & Predictor")
@@ -480,19 +553,22 @@ with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
     st.markdown("This tab lets you analyze food price trends, map data, and download cleaned datasets.")
 
-    if st.session_state.df_food_prices_for_explorer is not None and not st.session_state.df_food_prices_for_explorer.empty:
+    if st.session_state.data_loaded and not st.session_state.df_food_prices_raw.empty:
         # Filter the full loaded data based on sidebar selections for explorer
-        food_data_explorer_filtered = st.session_state.df_food_prices_for_explorer[
-            (st.session_state.df_food_prices_for_explorer['Food_Item'].isin(selected_food_items_explorer)) &
-            (st.session_state.df_food_prices_for_explorer['Year'] >= (datetime.now().year - years_back_explorer))
+        # Operate on df_food_prices_raw as it's cleaner for explorer charts
+        food_data_explorer_filtered = st.session_state.df_food_prices_raw[
+            (st.session_state.df_food_prices_raw['Food_Item'].isin(selected_food_items_explorer)) &
+            (st.session_state.df_food_prices_raw['Year'] >= (datetime.now().year - years_back_explorer))
         ].copy()
+        
+        # Ensure 'Date' column is present for plotting in explorer.
+        # It's good to create it once after initial data load if possible,
+        # but here it's recalculated on filtered data to avoid issues.
+        food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered['Year'].astype(str) + '-' + food_data_explorer_filtered['Month'].astype(str) + '-01')
 
         if food_data_explorer_filtered.empty:
             st.info("No data available for the selected food items and years in the explorer. Try adjusting filters.")
         else:
-            food_data_explorer_filtered['Year'] = food_data_explorer_filtered['Year'].astype(int)
-            food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered[['Year', 'Month']].assign(DAY=1))
-
             # Data Quality Info
             st.markdown("#### 📊 Data Quality Check")
             st.markdown("This section helps you assess the completeness and reliability of the dataset.")
@@ -529,22 +605,19 @@ with tab1:
             else:
                 st.warning("Map cannot be displayed as GeoJSON data is missing.")
 
-            # --- National Average Price Trends by Food Item (Previously "Price Trends Over Time") ---
+            # --- National Average Price Trends by Food Item ---
             st.markdown("#### 📉 National Average Price Trends by Food Item")
             st.markdown("Shows average monthly trends across all states for each selected food item.")
 
-            # Get unique food items from the filtered data
             unique_food_items_for_national_trend = sorted(food_data_explorer_filtered['Food_Item'].dropna().unique())
 
             if unique_food_items_for_national_trend:
-                # Allow selecting a single food item for display in this chart
                 selected_food_item_national_trend = st.selectbox(
                     "Select Food Item to View National Average Trend:", 
                     unique_food_items_for_national_trend, 
                     key="national_food_trend_select"
                 )
 
-                # Calculate national average for the selected food item
                 df_national_avg_item = food_data_explorer_filtered[
                     food_data_explorer_filtered['Food_Item'] == selected_food_item_national_trend
                 ].groupby('Date')['Price'].mean().reset_index()
@@ -561,8 +634,7 @@ with tab1:
             else:
                 st.info("No food items available for national trend analysis.")
 
-
-            # --- Food Price Trends Within a Selected State (Previously "Trend in Avg Price Across States for a Selected Food Item") ---
+            # --- Food Price Trends Within a Selected State ---
             st.markdown("#### 📌 Food Price Trends Within a Selected State")
             st.markdown("Compare the price movement of all selected food items within a specific state.")
             
@@ -574,7 +646,6 @@ with tab1:
                     key="multi_food_state_trend"
                 )
 
-                # Filter data for the selected state and selected food items (from sidebar)
                 df_state_multi_food = food_data_explorer_filtered[
                     (food_data_explorer_filtered['State'] == selected_state_multi_food_trend) &
                     (food_data_explorer_filtered['Food_Item'].isin(selected_food_items_explorer))
@@ -632,7 +703,7 @@ with tab1:
                 key="download_explorer_data"
             )
     else:
-        st.info("No data available for display. Please set your filter options in the side bar and click 'Load and Analyze Data'.")
+        st.info("No data available for display. Please click 'Load All Data' in the sidebar.")
 
 
 # --- Predictor Tab ---
@@ -645,72 +716,50 @@ with tab2:
                 Food Inflation (foodYearOn): National Bureau of Statistics
                 """)
 
+    if st.session_state.data_loaded and not st.session_state.df_full_merged.empty:
+        df_predictor_data = st.session_state.df_full_merged.copy()
+        df_rainfall_history_for_forecast = st.session_state.df_rainfall_history_for_forecast.copy() # Pass a copy
 
-    if st.session_state.df_full_merged is None or st.session_state.df_full_merged.empty:
-        st.warning("No data available for prediction. Click 'Load and Analyze Data' in the sidebar to begin fetching and displaying the data.")
-    else:
-        # User inputs for Prediction
-        st.subheader("Prediction Settings")
+        available_states = sorted(df_predictor_data['State'].dropna().unique())
+        available_food_items = sorted(df_predictor_data['Food_Item'].dropna().unique())
 
-        unique_states_predictor = sorted(st.session_state.df_full_merged['State'].unique().tolist())
-        selected_state_predictor = st.selectbox("Select State", unique_states_predictor, key="predictor_state_select")
+        if not available_states or not available_food_items:
+            st.warning("Not enough data to run the predictor. Please ensure food prices, inflation, and rainfall data are available.")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                selected_state_predictor = st.selectbox("Select State:", available_states, key="predictor_state_select")
+            with col2:
+                selected_food_item_predictor = st.selectbox("Select Food Item:", available_food_items, key="predictor_food_select")
 
-        available_food_items_predictor = sorted(
-            st.session_state.df_full_merged[st.session_state.df_full_merged['State'] == selected_state_predictor]['Food_Item'].unique().tolist()
-        )
-        selected_crop_predictor = st.selectbox("Select Crop", available_food_items_predictor, key="predictor_crop_select")
+            forecast_months = st.slider("Forecast Months:", min_value=1, max_value=24, value=6, key="forecast_months_slider")
 
-        forecast_months = st.slider("Number of Months to Forecast (Max 12)", 1, 12, 3, key="forecast_months_slider")
+            if st.button("Predict Food Price", key="predict_button"):
+                ts, exog, _ = prepare_time_series_with_exog(df_predictor_data, selected_state_predictor, selected_food_item_predictor)
 
-        if st.button("Generate Price Forecast", key="generate_forecast_button"):
-            st.markdown("---")
-            st.subheader(f"Forecasting {selected_crop_predictor} Prices in {selected_state_predictor}")
-
-            # Prepare data (cached)
-            ts, exog, series_data_for_viz = prepare_time_series_with_exog(st.session_state.df_full_merged, selected_state_predictor, selected_crop_predictor)
-
-            if ts.empty or exog.empty:
-                st.warning(f"No complete historical data (price, inflation, or rainfall) available for {selected_crop_predictor} in {selected_state_predictor} after handling missing values. Please select another combination or check data sources.")
-            else:
-                # Call cached forecasting function
-                forecast_values, fitted_model = forecast_food_prices_sarimax(
-                    ts, 
-                    exog, 
-                    selected_crop_predictor, 
-                    selected_state_predictor, 
-                    forecast_months,
-                    st.session_state.df_rainfall_history_for_forecast # Pass the pre-processed rainfall history
-                )
-
-                if not forecast_values.empty:
-                    # Create forecast DataFrame
-                    forecast_df = pd.DataFrame({
-                        'Date': forecast_values.index,
-                        'Price': forecast_values.values,
-                        'Type': 'Forecast'
-                    })
-
-                    # Prepare historical data for plotting
-                    historical_df = series_data_for_viz[['Price']].copy()
-                    historical_df['Date'] = historical_df.index
-                    historical_df['Type'] = 'Historical'
-
-                    # Combine for plotting
-                    combined_df = pd.concat([historical_df, forecast_df])
-                    combined_df.sort_values('Date', inplace=True)
-
-                    fig = px.line(combined_df, x='Date', y='Price', color='Type',
-                                  title=f'{selected_crop_predictor} Price Forecast in {selected_state_predictor}',
-                                  labels={'Price': 'Price (₦/100KG)', 'Date': 'Date'})
-                    fig.update_layout(hovermode="x unified")
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    st.subheader("Forecasted Prices:")
-                    st.dataframe(forecast_df.set_index('Date').style.format({'Price': '₦{:,.2f}'}), use_container_width=True)
-
-                    # Display model summary (optional, but good for understanding)
-                    if fitted_model:
-                        with st.expander("View Model Summary"):
-                            st.write(fitted_model.summary())
+                if ts.empty or exog.empty:
+                    st.error(f"Cannot generate prediction for {selected_food_item_predictor} in {selected_state_predictor} due to insufficient data.")
                 else:
-                    st.error("Forecast could not be generated. Please check for errors in the logs above.")
+                    # Pass actual ts and exog values to the caching function
+                    forecast_series = forecast_food_prices_sarimax(ts, exog, selected_food_item_predictor, selected_state_predictor, forecast_months, df_rainfall_history_for_forecast)
+                    
+                    if not forecast_series.empty:
+                        st.subheader(f"Forecasted Price for {selected_food_item_predictor} in {selected_state_predictor}")
+                        
+                        # Prepare data for plotting
+                        historical_prices = pd.DataFrame({'Date': ts.index, 'Price': ts.values, 'Type': 'Historical'})
+                        forecast_prices = pd.DataFrame({'Date': forecast_series.index, 'Price': forecast_series.values, 'Type': 'Forecast'})
+                        
+                        combined_df = pd.concat([historical_prices, forecast_prices])
+
+                        fig = px.line(combined_df, x='Date', y='Price', color='Type',
+                                    title=f"Historical and Forecasted Prices for {selected_food_item_predictor} in {selected_state_predictor}",
+                                    labels={"Price": "Price (₦ per 100 KG)", "Date": "Date"})
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        st.markdown("#### Forecast Details:")
+                        st.dataframe(forecast_prices, use_container_width=True)
+                    else:
+                        st.warning("Could not generate a forecast. Please check the data for the selected item and state.")
+    else:
+        st.info("No data available for prediction. Please click 'Load All Data' in the sidebar.")
