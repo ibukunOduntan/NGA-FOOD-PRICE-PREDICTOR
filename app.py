@@ -208,19 +208,13 @@ def load_prediction_model(food_item_capitalized):
         st.error(f"Model file not found for {food_item_capitalized}: {model_path}. Please ensure models are trained and saved correctly.")
         return None
     try:
+        # Load the model with custom_objects if needed (e.g., for custom layers/losses)
+        # For a standard LSTM, it might not be necessary, but good practice if you have any.
         model = load_model(model_path)
         return model
     except Exception as e:
         st.error(f"Error loading model {model_name}: {e}")
         return None
-
-def create_sequences(data, sequence_length):
-    """Creates sequences for LSTM input."""
-    xs = []
-    for i in range(len(data) - sequence_length):
-        x = data[i:(i + sequence_length), 0]
-        xs.append(x)
-    return np.array(xs)
 
 def forecast_prices(model, scaler, historical_prices_scaled, num_months_to_forecast, sequence_length=12):
     """
@@ -234,10 +228,13 @@ def forecast_prices(model, scaler, historical_prices_scaled, num_months_to_forec
     
     predicted_prices_scaled = []
     for _ in range(num_months_to_forecast):
-        next_price_scaled = model.predict(current_sequence, verbose=0)[0, 0]
+        # model.predict returns a numpy array. We need the scalar value.
+        next_price_scaled = model.predict(current_sequence, verbose=0)[0, 0] # Get the scalar value
         predicted_prices_scaled.append(next_price_scaled)
+        
         # Update the sequence: remove the first element, add the predicted element
-        current_sequence = np.append(current_sequence[:, 1:, :], [[next_price_scaled]], axis=1)
+        # Ensure 'next_price_scaled' is reshaped to (1, 1, 1) to match current_sequence's last dimension
+        current_sequence = np.append(current_sequence[:, 1:, :], next_price_scaled.reshape(1, 1, 1), axis=1)
 
     predicted_prices = scaler.inverse_transform(np.array(predicted_prices_scaled).reshape(-1, 1))
     return predicted_prices.flatten()
@@ -466,38 +463,9 @@ with tab2:
                         
                         # Create future dates for the forecast
                         last_historical_date = df_item_national_avg['Date'].max()
-                        future_dates = [last_historical_date + timedelta(days=30 * i) for i in range(1, num_months_to_forecast + 1)]
+                        future_dates = [last_historical_date + pd.DateOffset(months=i) for i in range(1, num_months_to_forecast + 1)]
                         
                         df_predictions = pd.DataFrame({
                             'Date': future_dates,
                             'Food_Item': food_item_to_forecast,
-                            'Price': predicted_prices,
-                            'Type': 'Forecast'
-                        })
-
-                        df_historical = df_item_national_avg.copy()
-                        df_historical['Type'] = 'Historical'
-
-                        df_combined = pd.concat([df_historical, df_predictions])
-
-                        fig_forecast = px.line(
-                            df_combined,
-                            x='Date',
-                            y='Price',
-                            color='Type',
-                            title=f"National Average Price Forecast for {food_item_to_forecast}",
-                            labels={"Price": "Price (₦ per 100 KG)", "Date": "Date", "Type": "Data Type"},
-                            line_dash='Type' # Differentiate historical and forecast lines
-                        )
-                        fig_forecast.update_traces(
-                            selector=dict(name='Forecast'),
-                            line=dict(color='red', dash='dot') # Make forecast line red and dotted
-                        )
-                        st.plotly_chart(fig_forecast, use_container_width=True)
-
-                        st.markdown("#### 📈 Forecasted Prices")
-                        st.dataframe(df_predictions[['Date', 'Price']].style.format({"Price": "₦{:,.2f}"}))
-            else:
-                st.warning("Please select a valid food item and ensure its model is available.")
-    else:
-        st.info("Data is being loaded. Please wait or check the messages in the sidebar.")
+                            'Price': predicted_
