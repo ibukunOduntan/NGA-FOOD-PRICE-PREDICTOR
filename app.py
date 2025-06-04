@@ -86,7 +86,7 @@ def fetch_food_prices_from_api(api_url, food_items, country='Nigeria', years_bac
 @st.cache_data(ttl=3600 * 24)  # Cache for 24 hours
 def load_geojson():
     try:
-        filepath = "nga/ngs.json"
+        filepath = "ngs.json"
         if not os.path.exists(filepath): st.error("GeoJSON file 'ngs.json' not found. Please ensure it's in the root directory."); return None
         with open(filepath, "r") as f: return json.load(f)
     except Exception as e: st.error(f"Error loading GeoJSON: {e}"); return None
