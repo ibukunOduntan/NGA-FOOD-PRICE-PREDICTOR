@@ -228,7 +228,7 @@ st.markdown("""
 Welcome to the interactive dashboard to explore food price trends across Nigerian states and predict future prices.
 """)
 
-tab1 = st.tab["📊 Data Explorer"]
+tab1, = st.tabs(["📊 Data Explorer"])
 
 with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
