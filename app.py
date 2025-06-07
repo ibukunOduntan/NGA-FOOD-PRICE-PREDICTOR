@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # --- Global Configurations / Data Sources ---
 API_URL = "https://microdata.worldbank.org/index.php/api/tables/data/fcv/wld_2021_rtfp_v02_m"
-TARGET_FOOD_ITEMS = ['gari', 'groundnuts', 'maize', 'millet', 'sorghum', "cassava_meal"]
+TARGET_FOOD_ITEMS = ['gari', 'groundnuts', 'maize', 'sorghum', "cassava_meal"]
 CAPITALIZED_FOOD_ITEMS = [item.capitalize() for item in TARGET_FOOD_ITEMS]
 BASE_MODEL_DIR = "models"  # Directory where pre-trained models are stored
 
@@ -228,7 +228,7 @@ st.markdown("""
 Welcome to the interactive dashboard to explore food price trends across Nigerian states and predict future prices.
 """)
 
-tab1, tab2 = st.tabs(["📊 Data Explorer", "🧠 Predictor"])
+tab1 = st.tab["📊 Data Explorer"]
 
 with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
