@@ -55,7 +55,7 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     limit, offset = 10000, 0
     all_records = []
 
-    # Initial fetch to detect available columns
+    # Initial fetch to get structure
     response_initial = requests.get(api_url, params={'limit': 1, 'country': country})
     response_initial.raise_for_status()
     data_initial = response_initial.json()
@@ -72,7 +72,7 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if fpi_column:
         fields_to_fetch.append(fpi_column)
 
-    # Paginated data fetch
+    # Paginated fetch
     while True:
         response = requests.get(api_url, params={
             'limit': limit,
@@ -91,7 +91,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if df.empty:
         return pd.DataFrame(), [], pd.DataFrame()
 
-    # Type conversions
     df['year'] = pd.to_numeric(df['year'], errors='coerce')
     df['month'] = pd.to_numeric(df['month'], errors='coerce')
 
@@ -103,35 +102,31 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
 
     df = df[df['year'] >= datetime.now().year - years_back]
 
-    # Convert price fields to numeric
+    # Convert all price fields to numeric
     for col in price_fields:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
+    # Remove columns with *any* NaN
+    price_fields = [col for col in price_fields if not df[col].isnull().any()]
+
     if fpi_column:
         df[fpi_column] = pd.to_numeric(df[fpi_column], errors='coerce')
+        if df[fpi_column].isnull().any():
+            fpi_column = None
 
-    # Drop rows where all food price columns are NaN
+    # Drop rows where all remaining food prices are missing (shouldn’t happen now)
     df_clean = df.dropna(subset=price_fields, how='all').copy()
 
-    # Remove columns that are still fully NaN
-    price_fields = [col for col in price_fields if not df_clean[col].isnull().all()]
-
-    if fpi_column and fpi_column in df_clean.columns and not df_clean[fpi_column].isnull().all():
-        include_fpi = True
-    else:
-        include_fpi = False
-        fpi_column = None
-
-    if not price_fields and not include_fpi:
-        st.warning("No valid food price columns with data found.")
+    if not price_fields and not fpi_column:
+        st.warning("No valid food price columns found after NaN filtering.")
         return pd.DataFrame(), [], pd.DataFrame()
 
     # Group and average
     group_cols = ['country', 'adm1_name', 'year', 'month']
-    avg_fields = price_fields + ([fpi_column] if include_fpi else [])
+    avg_fields = price_fields + ([fpi_column] if fpi_column else [])
     df_avg = df_clean.groupby(group_cols)[avg_fields].mean().reset_index()
 
-    # Rename
+    # Rename columns
     df_avg.rename(columns={col: col[2:].capitalize() for col in price_fields}, inplace=True)
     if fpi_column:
         df_avg.rename(columns={fpi_column: 'Food_price_index'}, inplace=True)
@@ -139,9 +134,9 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     df_avg.rename(columns={'year': 'Year', 'month': 'Month'}, inplace=True)
     df_avg.drop(columns='country', inplace=True)
 
-    # Separate FPI
+    # Extract FPI separately if available
     df_fpi = pd.DataFrame()
-    if 'Food_price_index' in df_avg.columns:
+    if fpi_column and 'Food_price_index' in df_avg.columns:
         df_fpi = df_avg[['adm1_name', 'Year', 'Month', 'Food_price_index']].copy()
         df_fpi.rename(columns={'adm1_name': 'State', 'Food_price_index': 'Price'}, inplace=True)
         df_fpi['Food_Item'] = 'Food Price Index'
