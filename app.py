@@ -136,18 +136,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if fpi_column_raw and fpi_column_raw in df.columns:
         df[fpi_column_raw] = pd.to_numeric(df[fpi_column_raw], errors='coerce')
 
-    # --- NEW & CRUCIAL: Filter out 'c_' columns that are entirely NaN after conversion before melting ---
-    # We create a list of price columns that actually have non-NaN data
-    valid_price_columns_with_data = []
-    for col in actual_price_columns_in_df:
-        if col in df_clean.columns and not df_clean[col].isnull().all():
-            valid_price_columns_with_data.append(col)
-
-        else:
-            # Optionally, you could log this warning if running locally, Streamlit handles it well.
-            # print(f"Warning: Excluding '{col}' as it contains no valid data for Nigeria.")
-            pass # Suppress warning for now as Streamlit handles it
-
     # Now, update actual_price_columns_in_df to only include those with data
     actual_price_columns_in_df = valid_price_columns_with_data
     # --- END NEW & CRUCIAL ---
@@ -160,7 +148,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
         df_clean = df.dropna(subset=all_numeric_cols, how='all').copy() # Add .copy() to avoid SettingWithCopyWarning
     else:
         df_clean = df.copy() # If no numeric cols, just make a copy
-
     if df_clean.empty and not df_fpi.empty:
         # If no regular food price data remains after cleaning but FPI exists,
         # we can proceed only with FPI. This needs adjustment for the return values.
@@ -169,6 +156,16 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     elif df_clean.empty:
          st.warning("No data remains after cleaning and filtering. Returning empty DataFrames.")
          return pd.DataFrame(), [], pd.DataFrame()
+
+    df_clean = df.dropna(subset=all_numeric_cols, how='all').copy()  # This is correct
+    # --- CORRECT PLACE to exclude empty columns AFTER cleaning ---
+    valid_price_columns_with_data = []
+    for col in actual_price_columns_in_df:
+        if not df_clean[col].isnull().all():
+            valid_price_columns_with_data.append(col)
+    
+    actual_price_columns_in_df = valid_price_columns_with_data
+
 
     groupby_cols = ['country', 'adm1_name', 'year', 'month']
     
