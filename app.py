@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # --- Global Configurations / Data Sources ---
 API_URL = "https://microdata.worldbank.org/index.php/api/tables/data/fcv/wld_2021_rtfp_v02_m"
 # TARGET_FOOD_ITEMS will be dynamically populated from API response for Nigeria
-BASE_MODEL_DIR = "models"  # Directory where pre-trained models are stored
+BASE_MODEL_DIR = "models"  # Directory where pre-trained models is stored
 
 # Static information about typical WFP units for Nigerian food prices
 WFP_UNITS_INFO = {
@@ -65,10 +65,10 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
         return pd.DataFrame(), [], pd.DataFrame()
 
     sample = pd.DataFrame(data_initial['data'])
-    price_fields = [col for col in sample.columns if col.startswith('c_') and '_unit' not in col and col != 'c_food_price_index']
+    price_fields_initial = [col for col in sample.columns if col.startswith('c_') and '_unit' not in col and col != 'c_food_price_index']
     fpi_column = 'c_food_price_index' if 'c_food_price_index' in sample.columns else None
 
-    fields_to_fetch = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
+    fields_to_fetch = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields_initial
     if fpi_column:
         fields_to_fetch.append(fpi_column)
 
@@ -102,43 +102,64 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
 
     df = df[df['year'] >= datetime.now().year - years_back]
 
-    # Convert all price fields to numeric
-    # Convert all price fields to numeric
-    for col in price_fields:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Remove any price field that has even a single NaN
-    price_fields = [col for col in price_fields if col in df.columns and df[col].notna().all()]
+    # Convert all price fields to numeric and identify those with NaNs
+    price_fields = []
+    for col in price_fields_initial:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Only keep columns that do NOT have any NaN values
+            if df[col].notna().all():
+                price_fields.append(col)
+            else:
+                st.warning(f"Column '{col}' removed due to NaN values.")
     
     # Rebuild df to only keep necessary fields + surviving price columns
     keep_cols = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
     if fpi_column:
         keep_cols.append(fpi_column)
     
-    df = df[keep_cols]
+    # Ensure all columns in keep_cols actually exist in df before selection
+    df = df[[col for col in keep_cols if col in df.columns]]
 
 
-
-    if fpi_column:
+    if fpi_column and fpi_column in df.columns:
         df[fpi_column] = pd.to_numeric(df[fpi_column], errors='coerce')
+        # If FPI itself has NaNs, we might choose to drop it or handle it differently.
+        # For now, if it has any NaNs, we will treat it as if it wasn't available.
         if df[fpi_column].isnull().any():
+            st.warning(f"Food Price Index column '{fpi_column}' contains NaN values and will not be used.")
             fpi_column = None
+    else:
+        fpi_column = None
 
-    # Drop rows where all remaining food prices are missing (shouldn’t happen now)
-    df_clean = df.dropna(subset=price_fields, how='all').copy()
+
+    # Drop rows where all remaining food prices are missing
+    # This acts as a final safeguard after column-level NaN removal
+    if price_fields: # Only try to dropna if there are still price fields left
+        df_clean = df.dropna(subset=price_fields, how='all').copy()
+    else:
+        df_clean = df.copy() # If no price fields, no need to drop rows based on them
+
 
     if not price_fields and not fpi_column:
-        st.warning("No valid food price columns found after NaN filtering.")
+        st.warning("No valid food price or FPI columns found after NaN filtering.")
         return pd.DataFrame(), [], pd.DataFrame()
 
     # Group and average
     group_cols = ['country', 'adm1_name', 'year', 'month']
     avg_fields = price_fields + ([fpi_column] if fpi_column else [])
+    
+    # Filter avg_fields to only include columns that are actually present in df_clean
+    avg_fields = [col for col in avg_fields if col in df_clean.columns]
+
+    if not avg_fields: # If no columns to average after filtering, return empty
+        return pd.DataFrame(), [], pd.DataFrame()
+
     df_avg = df_clean.groupby(group_cols)[avg_fields].mean().reset_index()
 
     # Rename columns
     df_avg.rename(columns={col: col[2:].capitalize() for col in price_fields}, inplace=True)
-    if fpi_column:
+    if fpi_column and fpi_column in df_avg.columns: # Check if FPI column is still there after grouping
         df_avg.rename(columns={fpi_column: 'Food_price_index'}, inplace=True)
 
     df_avg.rename(columns={'year': 'Year', 'month': 'Month'}, inplace=True)
@@ -146,20 +167,27 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
 
     # Extract FPI separately if available
     df_fpi = pd.DataFrame()
-    if fpi_column and 'Food_price_index' in df_avg.columns:
+    if 'Food_price_index' in df_avg.columns:
         df_fpi = df_avg[['adm1_name', 'Year', 'Month', 'Food_price_index']].copy()
         df_fpi.rename(columns={'adm1_name': 'State', 'Food_price_index': 'Price'}, inplace=True)
         df_fpi['Food_Item'] = 'Food Price Index'
         df_avg.drop(columns=['Food_price_index'], inplace=True)
 
     # Melt to long format
-    df_long = pd.melt(df_avg, id_vars=['adm1_name', 'Year', 'Month'], var_name='Food_Item', value_name='Price')
+    # Only include columns that are actually present in df_avg for melting
+    columns_to_melt = [col for col in df_avg.columns if col not in ['adm1_name', 'Year', 'Month']]
+    
+    if not columns_to_melt: # If nothing to melt, return empty
+        return pd.DataFrame(), [], df_fpi
+
+    df_long = pd.melt(df_avg, id_vars=['adm1_name', 'Year', 'Month'], var_name='Food_Item', value_name='Price', value_vars=columns_to_melt)
     df_long.rename(columns={'adm1_name': 'State'}, inplace=True)
-    df_long.dropna(subset=['Price'], inplace=True)
+    df_long.dropna(subset=['Price'], inplace=True) # Drop rows where price became NaN after melting
     df_long.sort_values(by=['State', 'Year', 'Month', 'Food_Item'], inplace=True)
     df_long.reset_index(drop=True, inplace=True)
 
-    dynamic_food_items_lower = [col[2:].lower() for col in price_fields]
+    # dynamic_food_items_lower should only include items from the *surviving* price_fields
+    dynamic_food_items_lower = [col[2:].lower() for col in price_fields if col[2:].capitalize() in df_long['Food_Item'].unique()]
 
     return df_long, dynamic_food_items_lower, df_fpi
 
@@ -177,8 +205,8 @@ def load_and_merge_all_data_directly(years_back):
     with st.spinner("Loading and preparing data... this might take a moment. 🎉"):
         df_food_prices, dynamic_food_items_lower, df_fpi = fetch_food_prices_from_api(API_URL, 'Nigeria', years_back)
         
-        if df_food_prices.empty and df_fpi.empty: 
-            st.error("Failed to load any data. Please check API connectivity and data availability."); 
+        if df_food_prices.empty and df_fpi.empty:  
+            st.error("Failed to load any data. Please check API connectivity and data availability.");  
             return pd.DataFrame(), pd.DataFrame(), [], pd.DataFrame()
 
         df_merged = df_food_prices.copy()
@@ -204,7 +232,7 @@ def prepare_time_series_for_arima(df, food_item):
 
     log_series = np.log(series)
 
-    return log_series 
+    return log_series  
 
 # --- ARIMA Forecasting Function (Loads pre-trained model) ---
 @st.cache_resource(ttl=3600)  # Cache the loaded model for 1 hour
@@ -213,7 +241,7 @@ def load_and_forecast_arima_model(food_item_lower, ts_log_series_hash, forecast_
     Loads a pre-trained ARIMA model and generates a forecast.
     Uses a hash of the recent log-transformed time series data to ensure caching works effectively.
     """
-    model_filename = f"{food_item_lower.replace(' ', '_')}_model.pkl" 
+    model_filename = f"{food_item_lower.replace(' ', '_')}_model.pkl"  
     model_path = os.path.join(BASE_MODEL_DIR, model_filename)
 
     if not os.path.exists(model_path):
@@ -245,7 +273,7 @@ def load_and_forecast_arima_model(food_item_lower, ts_log_series_hash, forecast_
             forecast_index = pd.date_range(
                 start=last_historical_date + pd.DateOffset(months=1),
                 periods=forecast_steps,
-                freq='MS' 
+                freq='MS'  
             )
 
             forecast_series = pd.Series(forecast, index=forecast_index)
@@ -286,10 +314,10 @@ with st.sidebar:
 
 # After loading data, populate the multiselect with dynamic food items
 selected_food_items_explorer = st.sidebar.multiselect(
-    "Select Food Items:", 
-    st.session_state.capitalized_food_items, 
-    default=(['Maize'] if 'Maize' in st.session_state.capitalized_food_items else 
-             (st.session_state.capitalized_food_items[0:1] if st.session_state.capitalized_food_items else [])), 
+    "Select Food Items:",  
+    st.session_state.capitalized_food_items,  
+    default=(['Maize'] if 'Maize' in st.session_state.capitalized_food_items else  
+             (st.session_state.capitalized_food_items[0:1] if st.session_state.capitalized_food_items else [])),  
     key="explorer_food_select"
 )
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
@@ -387,7 +415,7 @@ with tab1:
                 st.warning("Cannot display map: GeoJSON data not loaded.")
 
             # New: Price Trend Over Time for a Selected Food Item (Average Across States)
-            st.markdown("---") 
+            st.markdown("---")  
             st.markdown("#### 📈 Average Price Trend Over Time for a Food Item (Across All States)")
             st.markdown("Select a food item to view its average price trend across all states for the set time period.")
 
@@ -423,7 +451,7 @@ with tab1:
                 st.info("Please select a food item to view its average price trend.")
 
             # New: Average Food Price Trend Across User Set Time Period for Each State
-            st.markdown("---") 
+            st.markdown("---")  
             st.markdown("#### 📊 Average Food Price Trend for Each State (All Food Items)")
             st.markdown("Select a state to view the price trends of all food items within that state over the set time period.")
 
@@ -457,7 +485,7 @@ with tab1:
                 st.info("Please select a state to view its food price trends.")
 
             # New: Correlation Plot of Food Prices
-            st.markdown("---") 
+            st.markdown("---")  
             st.markdown("#### 🤝 Food Price Correlation Plot")
             st.markdown("Understand how the average price *changes* of different food items (across all states) correlate with each other. A higher correlation (closer to 1 or -1) indicates a stronger relationship in their proportional movements.")
 
@@ -521,7 +549,7 @@ with tab1:
                         if item1 != item2 and frozenset({item1, item2}) not in seen_pairs_bottom:
                             bottom_pairs.append((item1, item2, return_corr_matrix.loc[item1, item2]))
                             seen_pairs_bottom.add(frozenset({item1, item2}))
-                        if len(bottom_pairs) >= 1: 
+                        if len(bottom_pairs) >= 1:  
                             break
                     if bottom_pairs:
                         item1, item2, corr_val = bottom_pairs[0]
@@ -537,7 +565,7 @@ with tab1:
                     missing_items = required_columns_for_correlation - current_columns_in_returns
                     st.info(f"Correlation plot for *all* target food items is shown only when data for every selected item is available. Missing: {', '.join(missing_items)}")
 
-            st.markdown("---") 
+            st.markdown("---")  
             st.markdown("#### 📈 Food Price Index Trend")
             st.markdown("This chart shows the trend of the Food Price Index over time across different states.")
             
@@ -564,7 +592,7 @@ with tab1:
                 st.info("No Food Price Index data found in the dataset.")
 
             # Raw Data Display and Download
-            st.markdown("---") 
+            st.markdown("---")  
             st.markdown("#### ⬇️ Raw Data & Download")
             st.markdown("View the raw data used for analysis and download it.")
 
