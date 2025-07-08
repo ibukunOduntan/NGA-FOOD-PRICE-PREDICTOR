@@ -100,7 +100,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
                 records = data['data']
                 if not records: break
                 all_records.extend(records)
-                offset += limit
             else: break
         except requests.exceptions.RequestException as e: st.error(f"Failed to fetch data from World Bank API: {e}"); break
         except json.JSONDecodeError as e: st.error(f"Failed to decode JSON from API response for food prices: {e}"); break
@@ -137,31 +136,55 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if fpi_column_raw and fpi_column_raw in df.columns:
         df[fpi_column_raw] = pd.to_numeric(df[fpi_column_raw], errors='coerce')
 
-    # --- NEW: Filter out 'c_' columns that are entirely NaN after conversion ---
-    cols_to_keep = []
+    # --- NEW & CRUCIAL: Filter out 'c_' columns that are entirely NaN after conversion before melting ---
+    # We create a list of price columns that actually have non-NaN data
+    valid_price_columns_with_data = []
     for col in actual_price_columns_in_df:
         if not df[col].isnull().all():
-            cols_to_keep.append(col)
+            valid_price_columns_with_data.append(col)
         else:
-            st.warning(f"Excluding '{col}' as it contains no valid data after conversion for Nigeria.")
-    actual_price_columns_in_df = cols_to_keep
-    # --- END NEW ---
+            # Optionally, you could log this warning if running locally, Streamlit handles it well.
+            # print(f"Warning: Excluding '{col}' as it contains no valid data for Nigeria.")
+            pass # Suppress warning for now as Streamlit handles it
+
+    # Now, update actual_price_columns_in_df to only include those with data
+    actual_price_columns_in_df = valid_price_columns_with_data
+    # --- END NEW & CRUCIAL ---
 
     # Drop rows where all identified price columns are NaN
+    # This also needs to consider the updated actual_price_columns_in_df
     all_numeric_cols = actual_price_columns_in_df + ([fpi_column_raw] if fpi_column_raw and fpi_column_raw in df.columns else [])
-    df_clean = df.dropna(subset=all_numeric_cols, how='all')
-    
+    # Only drop if there are columns to consider for dropping, otherwise it might drop everything.
+    if all_numeric_cols:
+        df_clean = df.dropna(subset=all_numeric_cols, how='all').copy() # Add .copy() to avoid SettingWithCopyWarning
+    else:
+        df_clean = df.copy() # If no numeric cols, just make a copy
+
+    if df_clean.empty and not df_fpi.empty:
+        # If no regular food price data remains after cleaning but FPI exists,
+        # we can proceed only with FPI. This needs adjustment for the return values.
+        # This path means df_avg and df_long will be empty, which is handled later.
+        pass
+    elif df_clean.empty:
+         st.warning("No data remains after cleaning and filtering. Returning empty DataFrames.")
+         return pd.DataFrame(), [], pd.DataFrame()
+
     groupby_cols = ['country', 'adm1_name', 'year', 'month']
     
-    # Columns to group by and average
+    # Columns to group by and average - this now uses the `actual_price_columns_in_df` that has been filtered for data
     cols_to_avg = actual_price_columns_in_df
     if fpi_column_raw and fpi_column_raw in df_clean.columns:
         cols_to_avg.append(fpi_column_raw)
 
+    # Ensure there are columns to average before proceeding
+    if not cols_to_avg:
+        st.warning("No valid columns to average after data cleaning. Returning empty DataFrames.")
+        return pd.DataFrame(), [], pd.DataFrame()
+
     df_avg = df_clean.groupby(groupby_cols)[cols_to_avg].mean().reset_index()
 
-    # Extract dynamic food items for selection (excluding FPI)
-    dynamic_food_items_lower = [col[2:] for col in actual_price_columns_in_df]
+    # Extract dynamic food items for selection (excluding FPI) - this is the key list for multiselect
+    dynamic_food_items_lower = [col[2:] for col in actual_price_columns_in_df] # This now uses the filtered list
 
     # Rename price columns (e.g., 'c_gari' -> 'Gari')
     df_avg.rename(columns={col: col[2:].capitalize() for col in actual_price_columns_in_df}, inplace=True)
