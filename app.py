@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # --- Global Configurations / Data Sources ---
 API_URL = "https://microdata.worldbank.org/index.php/api/tables/data/fcv/wld_2021_rtfp_v02_m"
 # TARGET_FOOD_ITEMS will be dynamically populated from API response for Nigeria
-BASE_MODEL_DIR = "models"  # Directory where pre-trained models is stored
+BASE_MODEL_DIR = "models"  # Directory where pre-trained models are stored
 
 # Static information about typical WFP units for Nigerian food prices
 WFP_UNITS_INFO = {
@@ -111,7 +111,8 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
             if df[col].notna().all():
                 price_fields.append(col)
             else:
-                pass
+                st.warning(f"Column '{col}' removed due to NaN values.")
+    
     # Rebuild df to only keep necessary fields + surviving price columns
     keep_cols = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
     if fpi_column:
@@ -164,13 +165,20 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     df_avg.rename(columns={'year': 'Year', 'month': 'Month'}, inplace=True)
     df_avg.drop(columns='country', inplace=True)
 
+    # Remove 'Market Average' from 'adm1_name' (which becomes 'State')
+    if 'adm1_name' in df_avg.columns:
+        df_avg = df_avg[df_avg['adm1_name'] != 'Market Average'].copy()
+
     # Extract FPI separately if available
     df_fpi = pd.DataFrame()
     if 'Food_price_index' in df_avg.columns:
         df_fpi = df_avg[['adm1_name', 'Year', 'Month', 'Food_price_index']].copy()
         df_fpi.rename(columns={'adm1_name': 'State', 'Food_price_index': 'Price'}, inplace=True)
         df_fpi['Food_Item'] = 'Food Price Index'
+        # Remove 'Market Average' from df_fpi as well
+        df_fpi = df_fpi[df_fpi['State'] != 'Market Average'].copy()
         df_avg.drop(columns=['Food_price_index'], inplace=True)
+
 
     # Melt to long format
     # Only include columns that are actually present in df_avg for melting
@@ -312,11 +320,16 @@ with st.sidebar:
             st.error("Failed to load data. Please check your internet connection or file paths.")
 
 # After loading data, populate the multiselect with dynamic food items
+# 1. Limit to the first 8 food items for display
+if st.session_state.capitalized_food_items:
+    initial_default_foods = st.session_state.capitalized_food_items[:min(8, len(st.session_state.capitalized_food_items))]
+else:
+    initial_default_foods = []
+
 selected_food_items_explorer = st.sidebar.multiselect(
     "Select Food Items:",  
     st.session_state.capitalized_food_items,  
-    default=(['Maize'] if 'Maize' in st.session_state.capitalized_food_items else  
-             (st.session_state.capitalized_food_items[0:1] if st.session_state.capitalized_food_items else [])),  
+    default=initial_default_foods, # Set default to the first 8 available items
     key="explorer_food_select"
 )
 years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=10, value=5, key="explorer_years_slider")
@@ -498,10 +511,11 @@ with tab1:
             )
             df_returns_avg = df_wide_avg_prices.pct_change().dropna()
 
-            required_columns_for_correlation = set(selected_food_items_explorer)
-            current_columns_in_returns = set(df_returns_avg.columns)
+            # 2. Only compute correlation when all available data is selected
+            all_available_food_items = set(st.session_state.capitalized_food_items)
+            selected_food_items_set = set(selected_food_items_explorer)
 
-            if not df_returns_avg.empty and len(df_returns_avg.columns) > 1 and required_columns_for_correlation.issubset(current_columns_in_returns):
+            if not df_returns_avg.empty and len(df_returns_avg.columns) > 1 and selected_food_items_set == all_available_food_items:
                 return_corr_matrix = df_returns_avg.corr()
 
                 fig_corr = px.imshow(
@@ -558,11 +572,13 @@ with tab1:
                 else:
                     st.info("Not enough distinct food items selected to determine least correlation.")
             else:
-                if df_returns_avg.empty:
-                    st.info("Not enough data with sufficient history to calculate meaningful average price change correlations. Please ensure you have selected enough years and food items.")
+                # 2. Prompt user to select all data for correlation
+                if not df_returns_avg.empty and len(df_returns_avg.columns) <= 1:
+                    st.info("Please select at least two food items to compute correlation.")
+                elif selected_food_items_set != all_available_food_items:
+                    st.info("To see the correlation plot, please select **all** available food items in the sidebar. This ensures a comprehensive correlation analysis.")
                 else:
-                    missing_items = required_columns_for_correlation - current_columns_in_returns
-                    st.info(f"Correlation plot for *all* target food items is shown only when data for every selected item is available. Missing: {', '.join(missing_items)}")
+                    st.info("Not enough data with sufficient history to calculate meaningful average price change correlations. Please ensure you have selected enough years and food items.")
 
             st.markdown("---")  
             st.markdown("#### 📈 Food Price Index Trend")
@@ -583,7 +599,19 @@ with tab1:
                         labels={'Price': 'Food Price Index', 'Date': 'Date'},
                         hover_data={'State': True, 'Price': ':.2f'}
                     )
-                    fig_fpi.update_layout(hovermode="x unified")
+                    # 4. Improve Food Price Index plot readability
+                    fig_fpi.update_layout(
+                        hovermode="x unified",
+                        height=600, # Increase plot height for better separation
+                        legend_title_text='State',
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
                     st.plotly_chart(fig_fpi, use_container_width=True)
                 else:
                     st.info("No Food Price Index data available for the selected time period.")
