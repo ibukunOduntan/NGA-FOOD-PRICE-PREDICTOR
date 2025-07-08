@@ -44,7 +44,7 @@ WFP_UNITS_INFO = {
     'Eggs': '30 pcs',
     'Bananas': '1.3 KG',
     'Cowpeas': '100 KG',
-    'Food_price_index': 'Index points'
+    'Food_price_index': 'Index poinnnts'
 }
 
 
