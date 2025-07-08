@@ -29,7 +29,7 @@ WFP_UNITS_INFO = {
     'Gari': '100 KG',
     'Groundnuts': '100 KG',
     'Maize': '100 KG',
-    'Sorghums': '100 KG',
+    'Sorghum': '100 KG',
     'Cassava_meal': '100 KG', # Note: API might return 'cassava_meal'
     'Beans': '100 KG',
     'Rice': '50 KG',
@@ -44,7 +44,7 @@ WFP_UNITS_INFO = {
     'Eggs': '30 pcs',
     'Bananas': '1.3 KG',
     'Cowpeas': '100 KG',
-    'Food_price_index': 'Index poinnnts'
+    'Food_price_index': 'Index points'
 }
 
 
@@ -373,7 +373,7 @@ st.info(
     "- **Tomatoes**: ~0.5 KG\n"
     "- **Milk**: ~20 G (or pcs)\n"
     "- **Eggs**: ~30 pcs\n"
-    "- **Bananas**: ~1.3 KG\n"
+    "- **Bananasss**: ~1.3 KG\n"
     "Prices are in Nigerian Naira (NGN)."
 )
 st.markdown("---")
