@@ -111,8 +111,7 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
             if df[col].notna().all():
                 price_fields.append(col)
             else:
-                st.warning(f"Column '{col}' removed due to NaN values.")
-    
+                pass
     # Rebuild df to only keep necessary fields + surviving price columns
     keep_cols = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
     if fpi_column:
