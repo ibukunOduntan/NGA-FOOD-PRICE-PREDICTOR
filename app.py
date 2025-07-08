@@ -50,106 +50,113 @@ WFP_UNITS_INFO = {
 
 # --- Functions to Fetch Data from External Sources (APIs, Files) ---
 
-@st.cache_data(ttl=3600 * 24)  # Cache the result of this API call for 24 hours
 @st.cache_data(ttl=3600 * 24)
 def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
-    limit = 10000
-    offset = 0
+    limit, offset = 10000, 0
     all_records = []
 
-    # 1. Fetch a small sample to get all column names
-    try:
-        response_sample = requests.get(api_url, params={'limit': 1000, 'country': country}, timeout=60)
-        response_sample.raise_for_status()
-        sample_data = response_sample.json()['data']
-        if not sample_data:
-            st.error("No sample data returned from API.")
-            return pd.DataFrame(), [], pd.DataFrame()
-        sample_df = pd.DataFrame(sample_data)
-    except Exception as e:
-        st.error(f"Failed to get sample data: {e}")
+    # Initial fetch to detect available columns
+    response_initial = requests.get(api_url, params={'limit': 1, 'country': country})
+    response_initial.raise_for_status()
+    data_initial = response_initial.json()
+
+    if 'data' not in data_initial or not data_initial['data']:
+        st.error("Initial API response is empty.")
         return pd.DataFrame(), [], pd.DataFrame()
 
-    # Get all 'c_' columns that aren't units or FPI
-    all_c_columns = [col for col in sample_df.columns if col.startswith('c_') and '_unit' not in col and col != 'c_food_price_index']
-    
-    # Keep only c_ columns that have at least SOME non-null data
-    valid_price_columns = [col for col in all_c_columns if not sample_df[col].isnull().all()]
+    sample = pd.DataFrame(data_initial['data'])
+    price_fields = [col for col in sample.columns if col.startswith('c_') and '_unit' not in col and col != 'c_food_price_index']
+    fpi_column = 'c_food_price_index' if 'c_food_price_index' in sample.columns else None
 
-    # Check for FPI
-    fpi_column = 'c_food_price_index' if 'c_food_price_index' in sample_df.columns else None
+    fields_to_fetch = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
     if fpi_column:
-        expected_fields = ['country', 'adm1_name', 'year', 'month', 'DATES'] + valid_price_columns + [fpi_column]
-    else:
-        expected_fields = ['country', 'adm1_name', 'year', 'month', 'DATES'] + valid_price_columns
+        fields_to_fetch.append(fpi_column)
 
-    fields_param = ','.join(expected_fields)
-
-    # 2. Fetch all data using only valid fields
+    # Paginated data fetch
     while True:
-        try:
-            response = requests.get(api_url, params={'limit': limit, 'offset': offset, 'country': country, 'fields': fields_param}, timeout=60)
-            response.raise_for_status()
-            data = response.json()
-            if 'data' not in data or not data['data']:
-                break
-            all_records.extend(data['data'])
-            offset += limit
-        except Exception as e:
-            st.error(f"Error during full fetch: {e}")
+        response = requests.get(api_url, params={
+            'limit': limit,
+            'offset': offset,
+            'country': country,
+            'fields': ','.join(fields_to_fetch)
+        })
+        response.raise_for_status()
+        data = response.json().get('data', [])
+        if not data:
             break
+        all_records.extend(data)
+        offset += limit
 
     df = pd.DataFrame(all_records)
     if df.empty:
         return pd.DataFrame(), [], pd.DataFrame()
 
-    # Basic cleaning and filtering by year
+    # Type conversions
     df['year'] = pd.to_numeric(df['year'], errors='coerce')
     df['month'] = pd.to_numeric(df['month'], errors='coerce')
-    df['DATES'] = pd.to_datetime(df.get('DATES'), errors='coerce')
-    df.dropna(subset=['year', 'month'], inplace=True)
-    df = df[df['year'] >= (datetime.now().year - years_back)]
 
-    # Keep only valid columns with actual data (again, some might be dropped)
-    actual_valid_price_columns = [col for col in valid_price_columns if col in df.columns and not df[col].isnull().all()]
+    if 'DATES' in df.columns:
+        df['DATES'] = pd.to_datetime(df['DATES'], errors='coerce')
+        df.dropna(subset=['DATES', 'year', 'month'], inplace=True)
+    else:
+        df.dropna(subset=['year', 'month'], inplace=True)
 
-    for col in actual_valid_price_columns:
+    df = df[df['year'] >= datetime.now().year - years_back]
+
+    # Convert price fields to numeric
+    for col in price_fields:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-    if fpi_column and fpi_column in df.columns:
+
+    if fpi_column:
         df[fpi_column] = pd.to_numeric(df[fpi_column], errors='coerce')
 
-    # Drop rows where all price columns (and FPI if exists) are NaN
-    all_price_cols = actual_valid_price_columns + ([fpi_column] if fpi_column and fpi_column in df.columns else [])
-    df.dropna(subset=all_price_cols, how='all', inplace=True)
+    # Drop rows where all food price columns are NaN
+    df_clean = df.dropna(subset=price_fields, how='all').copy()
 
-    # Group and aggregate
-    df_group = df.groupby(['country', 'adm1_name', 'year', 'month'])[all_price_cols].mean().reset_index()
-    df_group.rename(columns={col: col[2:].capitalize() for col in actual_valid_price_columns}, inplace=True)
-    if fpi_column and fpi_column in df_group.columns:
-        df_group.rename(columns={fpi_column: 'Food_price_index'}, inplace=True)
+    # Remove columns that are still fully NaN
+    price_fields = [col for col in price_fields if not df_clean[col].isnull().all()]
 
-    df_group.rename(columns={'year': 'Year', 'month': 'Month'}, inplace=True)
-    if 'country' in df_group.columns:
-        df_group.drop(columns=['country'], inplace=True)
+    if fpi_column and fpi_column in df_clean.columns and not df_clean[fpi_column].isnull().all():
+        include_fpi = True
+    else:
+        include_fpi = False
+        fpi_column = None
 
-    # Extract FPI data
+    if not price_fields and not include_fpi:
+        st.warning("No valid food price columns with data found.")
+        return pd.DataFrame(), [], pd.DataFrame()
+
+    # Group and average
+    group_cols = ['country', 'adm1_name', 'year', 'month']
+    avg_fields = price_fields + ([fpi_column] if include_fpi else [])
+    df_avg = df_clean.groupby(group_cols)[avg_fields].mean().reset_index()
+
+    # Rename
+    df_avg.rename(columns={col: col[2:].capitalize() for col in price_fields}, inplace=True)
+    if fpi_column:
+        df_avg.rename(columns={fpi_column: 'Food_price_index'}, inplace=True)
+
+    df_avg.rename(columns={'year': 'Year', 'month': 'Month'}, inplace=True)
+    df_avg.drop(columns='country', inplace=True)
+
+    # Separate FPI
     df_fpi = pd.DataFrame()
-    if 'Food_price_index' in df_group.columns:
-        df_fpi = df_group[['adm1_name', 'Year', 'Month', 'Food_price_index']].copy()
-        df_fpi.rename(columns={'Food_price_index': 'Price'}, inplace=True)
+    if 'Food_price_index' in df_avg.columns:
+        df_fpi = df_avg[['adm1_name', 'Year', 'Month', 'Food_price_index']].copy()
+        df_fpi.rename(columns={'adm1_name': 'State', 'Food_price_index': 'Price'}, inplace=True)
         df_fpi['Food_Item'] = 'Food Price Index'
-        df_group.drop(columns=['Food_price_index'], inplace=True)
+        df_avg.drop(columns=['Food_price_index'], inplace=True)
 
     # Melt to long format
-    df_long = df_group.melt(id_vars=['adm1_name', 'Year', 'Month'], var_name='Food_Item', value_name='Price')
+    df_long = pd.melt(df_avg, id_vars=['adm1_name', 'Year', 'Month'], var_name='Food_Item', value_name='Price')
     df_long.rename(columns={'adm1_name': 'State'}, inplace=True)
-    df_long = df_long[df_long['State'] != 'Market Average']
     df_long.dropna(subset=['Price'], inplace=True)
     df_long.sort_values(by=['State', 'Year', 'Month', 'Food_Item'], inplace=True)
+    df_long.reset_index(drop=True, inplace=True)
 
-    food_items = [col[2:] for col in actual_valid_price_columns]
+    dynamic_food_items_lower = [col[2:].lower() for col in price_fields]
 
-    return df_long.reset_index(drop=True), food_items, df_fpi
+    return df_long, dynamic_food_items_lower, df_fpi
 
 
 @st.cache_data(ttl=3600 * 24)  # Cache for 24 hours
