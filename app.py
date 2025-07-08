@@ -103,15 +103,20 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     df = df[df['year'] >= datetime.now().year - years_back]
 
     # Convert all price fields to numeric
+    # Convert all price fields to numeric
     for col in price_fields:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Remove columns with *any* NaN
-    # Drop columns (price fields) that contain any NaNs
-    df.dropna(axis=1, subset=price_fields, inplace=True)
     
-    # Update the list of price fields to only the ones that survived
-    price_fields = [col for col in price_fields if col in df.columns]
+    # Remove any price field that has even a single NaN
+    price_fields = [col for col in price_fields if df[col].notna().all()]
+    
+    # Rebuild df to only keep necessary fields + surviving price columns
+    keep_cols = ['country', 'adm1_name', 'year', 'month', 'DATES'] + price_fields
+    if fpi_column:
+        keep_cols.append(fpi_column)
+    
+    df = df[keep_cols]
+
 
 
     if fpi_column:
