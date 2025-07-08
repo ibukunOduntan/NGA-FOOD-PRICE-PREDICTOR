@@ -290,6 +290,7 @@ def load_and_forecast_arima_model(food_item_lower, ts_log_series_hash, forecast_
             return pd.Series(dtype='float64'), None
 
 # --- Streamlit App Setup ---
+# --- Streamlit App Setup ---
 st.sidebar.title("🧊 Filter Options")
 
 # Initialize session state variables if they don't exist
@@ -306,7 +307,7 @@ with st.sidebar:
         st.session_state.df_full_merged, st.session_state.df_food_prices_raw, \
         st.session_state.dynamic_food_items_lower, \
         st.session_state.df_fpi = load_and_merge_all_data_directly(years_back=10)
-        
+
         # Capitalize the dynamically fetched food items for display
         st.session_state.capitalized_food_items = [item.capitalize() for item in st.session_state.dynamic_food_items_lower]
 
@@ -320,8 +321,7 @@ with st.sidebar:
 selected_food_items_explorer = st.sidebar.multiselect(
     "Select Food Items (First 8 Shown):",
     st.session_state.capitalized_food_items[:8],  # Show only first 8
-    default=(['Maize'] if 'Maize' in st.session_state.capitalized_food_items[:8] else  
-             (st.session_state.capitalized_food_items[:1] if st.session_state.capitalized_food_items else [])),  
+    default=(st.session_state.capitalized_food_items[:8] if st.session_state.capitalized_food_items else []), # Modified default to select only the first 8
     key="explorer_food_select"
 )
 
@@ -359,9 +359,9 @@ tab1, tab2 = st.tabs(["📊 Data Explorer", "📈 Food Price Index Prediction"])
 with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
     st.markdown("This tab lets you analyze food price trends, map data, and download cleaned datasets.")
-    
+
     if st.session_state.data_loaded:
-        
+
         # Filter food price data (excluding FPI)
         food_data_explorer_filtered = st.session_state.df_food_prices_raw[
             (st.session_state.df_food_prices_raw['Food_Item'].isin(selected_food_items_explorer)) &
@@ -385,7 +385,7 @@ with tab1:
             if nigeria_geojson:
                 try:
                     available_map_items = food_data_explorer_filtered['Food_Item'].unique()
-                    if selected_food_items_explorer and available_map_items.size > 0:  
+                    if selected_food_items_explorer and available_map_items.size > 0:
                         selected_food_for_map = st.selectbox(
                             "Select Food Item for Map:",
                             available_map_items,
@@ -420,7 +420,7 @@ with tab1:
                 st.warning("Cannot display map: GeoJSON data not loaded.")
 
             # New: Price Trend Over Time for a Selected Food Item (Average Across States)
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### 📈 Average Price Trend Over Time for a Food Item (Across All States)")
             st.markdown("Select a food item to view its average price trend across all states for the set time period.")
 
@@ -456,7 +456,7 @@ with tab1:
                 st.info("Please select a food item to view its average price trend.")
 
             # New: Average Food Price Trend Across User Set Time Period for Each State
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### 📊 Average Food Price Trend for Each State (All Food Items)")
             st.markdown("Select a state to view the price trends of all food items within that state over the set time period.")
 
@@ -490,7 +490,7 @@ with tab1:
                 st.info("Please select a state to view its food price trends.")
 
             # New: Correlation Plot of Food Prices
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### 🤝 Food Price Correlation Plot")
             st.markdown("Understand how the average price *changes* of different food items (across all states) correlate with each other. A higher correlation (closer to 1 or -1) indicates a stronger relationship in their proportional movements.")
 
@@ -521,12 +521,12 @@ with tab1:
                 st.plotly_chart(fig_corr, use_container_width=True)
 
                 st.markdown("##### Smart Insights on Correlation:")
-                np.fill_diagonal(return_corr_matrix.values, np.nan)  
+                np.fill_diagonal(return_corr_matrix.values, np.nan)
 
                 threshold = 0.75
                 max_pairs = 2
 
-                most_correlated = return_corr_matrix.stack().nlargest(20).index.tolist()  
+                most_correlated = return_corr_matrix.stack().nlargest(20).index.tolist()
 
                 top_pairs = []
                 seen_pairs = set()
@@ -556,7 +556,7 @@ with tab1:
                         if item1 != item2 and frozenset({item1, item2}) not in seen_pairs_bottom:
                             bottom_pairs.append((item1, item2, return_corr_matrix.loc[item1, item2]))
                             seen_pairs_bottom.add(frozenset({item1, item2}))
-                        if len(bottom_pairs) >= 1:  
+                        if len(bottom_pairs) >= 1:
                             break
                     if bottom_pairs:
                         item1, item2, corr_val = bottom_pairs[0]
@@ -572,10 +572,10 @@ with tab1:
                     missing_items = required_columns_for_correlation - current_columns_in_returns
                     st.info(f"Correlation plot for *all* target food items is shown only when data for every selected item is available. Missing: {', '.join(missing_items)}")
 
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### 📈 Food Price Index Trend")
             st.markdown("This chart shows the trend of the Food Price Index over time across different states.")
-            
+
             if not st.session_state.df_fpi.empty:
                 df_fpi_filtered = st.session_state.df_fpi[
                     (st.session_state.df_fpi['Year'] >= (datetime.now().year - years_back_explorer))
@@ -589,7 +589,7 @@ with tab1:
                         options=fpi_states,
                         default=fpi_states[:6]  # limit for better visibility
                     )
-                    
+
                     df_fpi_filtered = df_fpi_filtered[df_fpi_filtered['State'].isin(selected_fpi_states)]
 
                     fig_fpi = px.line(
@@ -609,7 +609,7 @@ with tab1:
                 st.info("No Food Price Index data found in the dataset.")
 
             # Raw Data Display and Download
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### ⬇️ Raw Data & Download")
             st.markdown("View the raw data used for analysis and download it.")
 
@@ -620,7 +620,7 @@ with tab1:
                 file_name="nigerian_food_prices_explorer_data.csv",
                 mime="text/csv",
             )
-            
+
             if not st.session_state.df_fpi.empty:
                 csv_fpi_data = st.session_state.df_fpi.to_csv(index=False).encode('utf-8')
                 st.download_button(
