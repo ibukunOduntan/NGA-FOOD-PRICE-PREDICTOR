@@ -137,6 +137,16 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if fpi_column_raw and fpi_column_raw in df.columns:
         df[fpi_column_raw] = pd.to_numeric(df[fpi_column_raw], errors='coerce')
 
+    # --- NEW: Filter out 'c_' columns that are entirely NaN after conversion ---
+    cols_to_keep = []
+    for col in actual_price_columns_in_df:
+        if not df[col].isnull().all():
+            cols_to_keep.append(col)
+        else:
+            st.warning(f"Excluding '{col}' as it contains no valid data after conversion for Nigeria.")
+    actual_price_columns_in_df = cols_to_keep
+    # --- END NEW ---
+
     # Drop rows where all identified price columns are NaN
     all_numeric_cols = actual_price_columns_in_df + ([fpi_column_raw] if fpi_column_raw and fpi_column_raw in df.columns else [])
     df_clean = df.dropna(subset=all_numeric_cols, how='all')
