@@ -140,8 +140,9 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     # We create a list of price columns that actually have non-NaN data
     valid_price_columns_with_data = []
     for col in actual_price_columns_in_df:
-        if not df[col].isnull().all():
+        if col in df_clean.columns and not df_clean[col].isnull().all():
             valid_price_columns_with_data.append(col)
+
         else:
             # Optionally, you could log this warning if running locally, Streamlit handles it well.
             # print(f"Warning: Excluding '{col}' as it contains no valid data for Nigeria.")
