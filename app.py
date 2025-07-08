@@ -190,7 +190,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     if not df_fpi.empty:
         df_fpi = df_fpi[df_fpi['State'] != 'Market Average']
 
-    st.write("FPI States Available:", fpi_states)
 
     # Get dynamic food items from the (potentially filtered) df_long
     all_dynamic_food_items_lower = [item.lower() for item in df_long['Food_Item'].unique()]
@@ -593,6 +592,9 @@ with tab1:
                 ].copy()
 
                 fpi_states = df_fpi_filtered['State'].unique().tolist()
+
+                st.write("FPI States Available:", fpi_states)
+
                 
                 # ONLY show the multiselect if there are states available AFTER filtering by year
                 if fpi_states: 
