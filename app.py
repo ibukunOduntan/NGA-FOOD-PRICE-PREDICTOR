@@ -107,7 +107,12 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # Remove columns with *any* NaN
-    price_fields = [col for col in price_fields if not df[col].isnull().any()]
+    # Drop columns (price fields) that contain any NaNs
+    df.dropna(axis=1, subset=price_fields, inplace=True)
+    
+    # Update the list of price fields to only the ones that survived
+    price_fields = [col for col in price_fields if col in df.columns]
+
 
     if fpi_column:
         df[fpi_column] = pd.to_numeric(df[fpi_column], errors='coerce')
