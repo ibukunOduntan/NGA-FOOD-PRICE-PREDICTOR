@@ -581,18 +581,19 @@ with tab1:
                     missing_items = required_columns_for_correlation - current_columns_in_returns
                     st.info(f"Correlation plot for *all* target food items is shown only when data for every selected item is available. Missing: {', '.join(missing_items)}")
 
-            st.markdown("---")  
+            st.markdown("---")
             st.markdown("#### 📈 Food Price Index Trend")
             st.markdown("This chart shows the trend of the Food Price Index over time across different states.")
-            
+
             if not st.session_state.df_fpi.empty:
                 df_fpi_filtered = st.session_state.df_fpi[
                     (st.session_state.df_fpi['Year'] >= (datetime.now().year - years_back_explorer))
                 ].copy()
 
-                if not df_fpi_filtered.empty:
-
-                    fpi_states = df_fpi_filtered['State'].unique().tolist()
+                fpi_states = df_fpi_filtered['State'].unique().tolist()
+                
+                # ONLY show the multiselect if there are states available AFTER filtering by year
+                if fpi_states: 
                     selected_fpi_states = st.multiselect(
                         "Select states to view FPI trend:",
                         options=fpi_states,
@@ -601,19 +602,22 @@ with tab1:
                     
                     df_fpi_filtered = df_fpi_filtered[df_fpi_filtered['State'].isin(selected_fpi_states)]
 
-                    fig_fpi = px.line(
-                        df_fpi_filtered,
-                        x='Date',
-                        y='Price',
-                        color='State',
-                        title='Food Price Index Over Time by State',
-                        labels={'Price': 'Food Price Index', 'Date': 'Date'},
-                        hover_data={'State': True, 'Price': ':.2f'}
-                    )
-                    fig_fpi.update_layout(hovermode="x unified")
-                    st.plotly_chart(fig_fpi, use_container_width=True)
+                    if not df_fpi_filtered.empty:
+                        fig_fpi = px.line(
+                            df_fpi_filtered,
+                            x='Date',
+                            y='Price',
+                            color='State',
+                            title='Food Price Index Over Time by State',
+                            labels={'Price': 'Food Price Index', 'Date': 'Date'},
+                            hover_data={'State': True, 'Price': ':.2f'}
+                        )
+                        fig_fpi.update_layout(hovermode="x unified")
+                        st.plotly_chart(fig_fpi, use_container_width=True)
+                    else:
+                        st.info("No Food Price Index data available for the selected states and time period.")
                 else:
-                    st.info("No Food Price Index data available for the selected time period.")
+                    st.info("No Food Price Index data available for the selected time period to display states.")
             else:
                 st.info("No Food Price Index data found in the dataset.")
 
