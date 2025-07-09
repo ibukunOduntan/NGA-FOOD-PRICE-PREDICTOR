@@ -31,7 +31,7 @@ WFP_UNITS_INFO = {
     'Maize': '100 KG',
     'Sorghum': '100 KG',
     'Cassava_meal': '100 KG', # Note: API might return 'cassava_meal'
-    'Beans': '100 KG',
+    'Beans (white)': '2.5 KG',
     'Rice': '50 KG',
     'Millet': '100 KG',
     'Yam': '1 KG',
@@ -342,9 +342,12 @@ Welcome to the interactive dashboard to explore food price trends across Nigeria
 st.info(
     "**Note on Units:** The World Bank Food Price Monitoring and Analysis (FPMA) tool typically reports "
     "food prices for Nigeria in the following approximate units (though specific units might vary by item and dataset version):\n"
-    "- **Gari, Groundnuts, Maize, Sorghum, Cowpeas, Millet**: ~100 KG\n"
+    "- **Gari, Groundnuts, Maize, Sorghum, Cowpeas**: ~100 KG\n"
+    "- **Millet**: ~2.6 KG\n"
     "- **Rice**: ~50 KG\n"
+    "- **Beans (white)**: ~2.5 KG\n"
     "- **Cassava Meal (Gari, Yellow)**: ~100 KG\n"
+    "- **Maize flour**: ~2.1 KG\n"
     "- **Yam**: ~1 KG\n"
     "- **Fish**: ~KG\n"
     "- **Oil (Palm)**: ~750 ML\n"
