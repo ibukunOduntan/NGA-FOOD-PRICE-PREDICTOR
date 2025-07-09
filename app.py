@@ -337,7 +337,7 @@ years_back_explorer = st.sidebar.slider("No. of years:", min_value=1, max_value=
 
 st.title("🥦 Nigerian Food Price Dashboard")
 st.markdown("""
-Welcome to the interactive dashboard to explore food price trends across Nigerian states and predict future prices.
+Welcome to the interactive dashboard to explore food price trends across Nigerian states.
 """)
 
 # Display the static unit information
@@ -592,9 +592,6 @@ with tab1:
                 ].copy()
 
                 fpi_states = df_fpi_filtered['State'].unique().tolist()
-
-                st.write("FPI States Available:", fpi_states)
-
                 
                 # ONLY show the multiselect if there are states available AFTER filtering by year
                 if fpi_states: 
@@ -651,8 +648,3 @@ with tab1:
         st.info("No data (food prices or FPI) loaded. Please check the API source or filters.")
     else:
         st.info("Please click 'Load All Data' in the sidebar to begin exploring.")
-
-with tab2:
-    st.markdown("### 📈 Food Price Index Prediction")
-    st.markdown("This tab will host the functionality for predicting the Food Price Index using an ARIMA model.")
-    st.info("Feature under development. Stay tuned!")
