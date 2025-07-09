@@ -126,7 +126,6 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
         # If FPI itself has NaNs, we might choose to drop it or handle it differently.
         # For now, if it has any NaNs, we will treat it as if it wasn't available.
         if df[fpi_column].isnull().any():
-            st.warning(f"Food Price Index column '{fpi_column}' contains NaN values and will not be used.")
             fpi_column = None
     else:
         fpi_column = None
@@ -360,7 +359,7 @@ st.info(
 st.markdown("---")
 
 
-tab1, tab2 = st.tabs(["📊 Data Explorer", "📈 Food Price Index Prediction"])
+tab1 = st.tabs(["📊 Data Explorer"])[0]
 
 with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
