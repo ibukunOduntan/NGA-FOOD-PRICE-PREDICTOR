@@ -403,6 +403,9 @@ with tab1:
                                 df_map_data_final = df_map_data_current.groupby('State')['Price'].mean().reset_index()
 
                                 if not df_map_data_final.empty:
+                                    # Get the month and year from the latest_date
+                                    latest_month_year_str = latest_date.strftime("%B %Y")
+
                                     fig_map = px.choropleth_mapbox(
                                         df_map_data_final,
                                         geojson=nigeria_geojson,
@@ -415,7 +418,7 @@ with tab1:
                                         opacity=0.7,
                                         hover_name='State',
                                         hover_data={'Price': ':.2f'},
-                                        title=f'Price of {selected_food_for_map} by State ({latest_date.strftime("%B %Y")})'
+                                        title=f'Price of {selected_food_for_map} by State ({latest_month_year_str})'
                                     )
                                     fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
                                     st.plotly_chart(fig_map, use_container_width=True)
@@ -501,6 +504,8 @@ with tab1:
                     df_top_10_expensive = df_bar_grouped.nlargest(10, 'Price')
 
                     if not df_top_10_expensive.empty:
+                        # Get the month and year from the latest_date_bar
+                        latest_month_year_bar_str = latest_date_bar.strftime("%B %Y")
                         unit_for_display = WFP_UNITS_INFO.get(bar_chart_food_item, "Unit N/A").replace("~", "")
                         x_axis_label = f'Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Price (Naira)'
                         
@@ -509,7 +514,7 @@ with tab1:
                             x='Price',
                             y='State',
                             orientation='h',
-                            title=f'Top 10 Most Expensive States for {bar_chart_food_item} ({latest_date_bar.strftime("%B %Y")})',
+                            title=f'Top 10 Most Expensive States for {bar_chart_food_item} ({latest_month_year_bar_str})',
                             labels={'Price': x_axis_label, 'State': 'State'},
                             color='Price',
                             color_continuous_scale="Viridis"
@@ -558,6 +563,9 @@ with tab1:
                         df_map_change_final = df_map_change_current.groupby('State')['Price_Change_Pct'].mean().reset_index()
 
                         if not df_map_change_final.empty:
+                            # Get the month and year from the latest_date_with_change
+                            latest_month_year_change_str = latest_date_with_change.strftime("%B %Y")
+
                             fig_change_map = px.choropleth_mapbox(
                                 df_map_change_final,
                                 geojson=nigeria_geojson,
@@ -570,7 +578,7 @@ with tab1:
                                 opacity=0.7,
                                 hover_name='State',
                                 hover_data={'Price_Change_Pct': ':.2f%'},
-                                title=f'{change_type} Price Change for {change_food_item} ({latest_date_with_change.strftime("%B %Y")})'
+                                title=f'{change_type} Price Change for {change_food_item} ({latest_month_year_change_str})'
                             )
                             fig_change_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
                             st.plotly_chart(fig_change_map, use_container_width=True)
