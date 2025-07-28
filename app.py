@@ -382,9 +382,7 @@ with tab1:
             (st.session_state.df_food_prices_raw['Food_Item'].isin(selected_food_items_explorer)) &
             (st.session_state.df_food_prices_raw['Year'] >= (datetime.now().year - years_back_explorer))
         ].copy()
-        # The 'Date' column is now created within fetch_food_prices_from_api, so this line is redundant
-        # food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered['Year'].astype(str) + '-' + food_data_explorer_filtered['Month'].astype(str) + '-01')
-
+        
         if food_data_explorer_filtered.empty and st.session_state.df_fpi.empty:
             st.info("No data available for the selected food items and years in the explorer. Try adjusting filters or loading data.")
         else:
@@ -653,22 +651,14 @@ with tab1:
             # 6. Correlation Heatmap
             st.markdown("---")
             st.markdown("#### ✅ 6. Correlation Heatmap")
-            st.markdown("Visualizes the **correlation between different food item prices nationwide**. This helps understand which food prices tend to move together, indicating potential supply chain or economic linkages.")
+            st.markdown("Visualizes the **correlation between different food item prices nationwide** for the **last 1 year**. This helps understand which food prices tend to move together, indicating potential supply chain or economic linkages.")
 
             if not st.session_state.df_food_prices_raw.empty:
-                # Filter for the last X years for correlation
-                start_date_correlation = datetime.now() - pd.DateOffset(years=years_back_explorer)
+                # Filter for the last 1 year specifically for correlation
+                start_date_correlation_1yr = datetime.now() - pd.DateOffset(years=1)
                 
-                # Ensure 'Date' column exists in df_food_prices_raw
-                # This check is now redundant if the fix in fetch_food_prices_from_api is applied
-                if 'Date' not in st.session_state.df_food_prices_raw.columns:
-                    st.session_state.df_food_prices_raw['Date'] = pd.to_datetime(
-                        st.session_state.df_food_prices_raw['Year'].astype(str) + '-' +
-                        st.session_state.df_food_prices_raw['Month'].astype(str) + '-01'
-                    )
-
                 df_correlation = st.session_state.df_food_prices_raw[
-                    (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation) &
+                    (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation_1yr) &
                     (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
                 ].copy()
 
@@ -676,19 +666,52 @@ with tab1:
                     # Pivot to get prices of different food items as columns
                     df_pivot = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price', aggfunc='mean')
                     
-                    # Calculate the correlation matrix
-                    correlation_matrix = df_pivot.corr()
+                    if df_pivot.shape[1] < 2: # Check if there are at least two food items to correlate
+                        st.info("Not enough distinct food items with data in the last year to calculate correlations.")
+                    else:
+                        # Calculate the correlation matrix
+                        correlation_matrix = df_pivot.corr()
 
-                    fig_corr = px.imshow(
-                        correlation_matrix,
-                        text_auto=True,
-                        aspect="auto",
-                        color_continuous_scale="RdBu",
-                        title=f'Correlation Heatmap of Food Prices (Last {years_back_explorer} Years)'
-                    )
-                    st.plotly_chart(fig_corr, use_container_width=True)
+                        fig_corr = px.imshow(
+                            correlation_matrix,
+                            text_auto=True,
+                            aspect="auto",
+                            color_continuous_scale="RdBu",
+                            title=f'Correlation Heatmap of Food Prices (Last 1 Year)'
+                        )
+                        st.plotly_chart(fig_corr, use_container_width=True)
+
+                        # Smart Insights for Correlation
+                        st.markdown("##### Smart Insights from Correlation:")
+                        corr_series = correlation_matrix.unstack()
+                        
+                        # Drop self-correlations and duplicates (e.g., A-B is same as B-A)
+                        # We sort the index for consistent grouping
+                        valid_correlations = []
+                        for (item1, item2), value in corr_series.items():
+                            if item1 < item2 and not pd.isna(value): # Ensure no self-correlation and no duplicates, and not NaN
+                                valid_correlations.append(((item1, item2), value))
+                        
+                        if valid_correlations:
+                            valid_correlations.sort(key=lambda x: x[1], reverse=True)
+
+                            most_correlated_pair = valid_correlations[0][0]
+                            most_correlated_value = valid_correlations[0][1]
+
+                            # Find the least correlated (most negative)
+                            valid_correlations.sort(key=lambda x: x[1])
+                            least_correlated_pair = valid_correlations[0][0]
+                            least_correlated_value = valid_correlations[0][1]
+
+                            st.markdown(f"""
+                                * The food items most positively correlated over the last year are **{most_correlated_pair[0]}** and **{most_correlated_pair[1]}** with a correlation coefficient of **{most_correlated_value:.2f}**. This suggests their prices tend to move in the same direction.
+                                * The food items least correlated (most negatively) over the last year are **{least_correlated_pair[0]}** and **{least_correlated_pair[1]}** with a correlation coefficient of **{least_correlated_value:.2f}**. This indicates their prices tend to move in opposite directions, or have a very weak relationship.
+                            """)
+                        else:
+                            st.info("Not enough pairs of food items with sufficient data to generate correlation insights.")
+
                 else:
-                    st.info("Not enough data to calculate correlations for the selected period and food items.")
+                    st.info("Not enough data to calculate correlations for the last 1 year for the selected food items.")
             else:
                 st.info("Load data first to see the correlation heatmap.")
 
@@ -722,4 +745,4 @@ with tab1:
         st.info("Please click 'Load All Data' in the sidebar to begin exploring the data.")
 
 st.markdown("---")
-st.markdown("Developed by [Your Name/Organization Here]")
+st.markdown("Developed by [Oduntan Ibukun Deborah]")
