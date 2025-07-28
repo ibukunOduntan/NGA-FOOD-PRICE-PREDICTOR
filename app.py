@@ -663,17 +663,21 @@ with tab1:
                 ].copy()
 
                 if not df_correlation.empty:
-                    # Pivot to get prices of different food items as columns
-                    df_pivot = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price', aggfunc='mean')
-                    
-                    if df_pivot.shape[1] < 2: # Check if there are at least two food items to correlate
+
+                    # Example of how month-on-month change would be calculated
+                    df_correlation['Price_Change'] = df_correlation.groupby('Food_Item')['Price'].pct_change() * 100
+                    # Then pivot on 'Price_Change' instead of 'Price'
+                    df_pivot_change = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price_Change', aggfunc='mean')
+                    # Pivot to get prices of different food items as columns                    
+                    if df_pivot_change.shape[1] < 2: # Check if there are at least two food items to correlate
                         st.info("Not enough distinct food items with data in the last year to calculate correlations.")
                     else:
                         # Calculate the correlation matrix
-                        correlation_matrix = df_pivot.corr()
+                        correlation_matrix_change = df_pivot_change.corr()
+
 
                         fig_corr = px.imshow(
-                            correlation_matrix,
+                            correlation_matrix_change,
                             text_auto=True,
                             aspect="auto",
                             color_continuous_scale="RdBu",
@@ -683,7 +687,7 @@ with tab1:
 
                         # Smart Insights for Correlation
                         st.markdown("##### Smart Insights from Correlation:")
-                        corr_series = correlation_matrix.unstack()
+                        corr_series = correlation_matrix_change.unstack()
                         
                         # Drop self-correlations and duplicates (e.g., A-B is same as B-A)
                         # We sort the index for consistent grouping
