@@ -388,8 +388,8 @@ with tab1:
             zero_price = (food_data_explorer_filtered['Price'] == 0).sum()
             st.info(f"Missing prices: {missing_price} | Zero prices: {zero_price} | Total entries: {total}")
 
-            st.markdown("#### 🗺️ Choropleth Map (Average Food Prices)")
-            st.markdown("Visualize average food prices by state using a color-coded map.")
+            st.markdown("#### 🗺️ Choropleth Map (Food Prices by State)")
+            st.markdown("Visualize food prices by state using a color-coded map. Select a food item and a specific month/year to see the price distribution.")
             nigeria_geojson = load_geojson()
             if nigeria_geojson:
                 try:
@@ -402,23 +402,73 @@ with tab1:
                             key="map_food_select"
                         )
                         if selected_food_for_map:
-                            df_map_data = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == selected_food_for_map].groupby('State')['Price'].mean().reset_index()
-                            fig_map = px.choropleth_mapbox(
-                                df_map_data,
-                                geojson=nigeria_geojson,
-                                locations='State',
-                                featureidkey="properties.NAME_1",
-                                color='Price',
-                                color_continuous_scale="Viridis",
-                                mapbox_style="carto-positron",
-                                zoom=5, center={"lat": 9.0820, "lon": 8.6753},
-                                opacity=0.7,
-                                hover_name='State',
-                                hover_data={'Price': ':.2f'},
-                                title=f'Average Price of {selected_food_for_map} by State'
-                            )
-                            fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
-                            st.plotly_chart(fig_map, use_container_width=True)
+                            # Filter data for the selected food item
+                            df_selected_food = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == selected_food_for_map]
+                            
+                            if not df_selected_food.empty:
+                                # Get unique years and months for the selected food item
+                                unique_years = sorted(df_selected_food['Year'].unique(), reverse=True)
+                                
+                                if unique_years:
+                                    # Default to the most recent year
+                                    default_year_idx = 0
+                                    
+                                    selected_year = st.selectbox(
+                                        "Select Year for Map:",
+                                        unique_years,
+                                        index=default_year_idx,
+                                        key="map_year_select"
+                                    )
+
+                                    df_selected_year = df_selected_food[df_selected_food['Year'] == selected_year]
+                                    unique_months = sorted(df_selected_year['Month'].unique(), reverse=True)
+                                    
+                                    if unique_months:
+                                        # Default to the most recent month for the selected year
+                                        default_month_idx = 0 
+                                        
+                                        selected_month = st.selectbox(
+                                            "Select Month for Map:",
+                                            unique_months,
+                                            index=default_month_idx,
+                                            format_func=lambda x: datetime(selected_year, x, 1).strftime('%B'),
+                                            key="map_month_select"
+                                        )
+
+                                        # Filter for the selected year and month
+                                        df_map_data_current = df_selected_food[
+                                            (df_selected_food['Year'] == selected_year) & 
+                                            (df_selected_food['Month'] == selected_month)
+                                        ]
+                                        
+                                        # Aggregate by state (should be only one value per state for a given month, but good practice)
+                                        df_map_data_final = df_map_data_current.groupby('State')['Price'].mean().reset_index()
+
+                                        if not df_map_data_final.empty:
+                                            fig_map = px.choropleth_mapbox(
+                                                df_map_data_final,
+                                                geojson=nigeria_geojson,
+                                                locations='State',
+                                                featureidkey="properties.NAME_1",
+                                                color='Price',
+                                                color_continuous_scale="Viridis",
+                                                mapbox_style="carto-positron",
+                                                zoom=5, center={"lat": 9.0820, "lon": 8.6753},
+                                                opacity=0.7,
+                                                hover_name='State',
+                                                hover_data={'Price': ':.2f'},
+                                                title=f'Price of {selected_food_for_map} by State ({datetime(selected_year, selected_month, 1).strftime("%B %Y")})'
+                                            )
+                                            fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+                                            st.plotly_chart(fig_map, use_container_width=True)
+                                        else:
+                                            st.info(f"No price data available for {selected_food_for_map} in {datetime(selected_year, selected_month, 1).strftime('%B %Y')}.")
+                                    else:
+                                        st.info(f"No month data available for {selected_food_for_map} in {selected_year}.")
+                                else:
+                                    st.info(f"No year data available for {selected_food_for_map}.")
+                            else:
+                                st.info(f"No data available for the selected food item '{selected_food_for_map}'.")
                         else:
                             st.info("No food item selected for map visualization.")
                     else:
@@ -595,7 +645,7 @@ with tab1:
                 fpi_states = df_fpi_filtered['State'].unique().tolist()
                 
                 # ONLY show the multiselect if there are states available AFTER filtering by year
-                if fpi_states: 
+                if fpi_states:  
                     selected_fpi_states = st.multiselect(
                         "Select states to view FPI trend:",
                         options=fpi_states,
@@ -644,8 +694,3 @@ with tab1:
                     file_name="nigerian_food_price_index_data.csv",
                     mime="text/csv",
                 )
-
-    elif st.session_state.data_loaded and st.session_state.df_food_prices_raw.empty and st.session_state.df_fpi.empty:
-        st.info("No data (food prices or FPI) loaded. Please check the API source or filters.")
-    else:
-        st.info("Please click 'Load All Data' in the sidebar to begin exploring.")
