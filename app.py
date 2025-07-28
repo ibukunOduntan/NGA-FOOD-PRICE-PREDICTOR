@@ -635,8 +635,93 @@ with tab1:
                     fig_multi_line.update_layout(hovermode="x unified")
                     st.plotly_chart(fig_multi_line, use_container_width=True)
                 else:
-                    st.info(f"No data available for {multi_state_food_item} in the selected states.")
+                    st.info(f"No data available for {multi_state_food_item} for the selected states.")
             elif multi_state_food_item and len(selected_states_to_compare) < 2:
-                st.info("Please select at least 2 states to compare their price trends.")
+                st.info("Please select at least two states to compare price trends.")
             else:
-                st.info("Please select a food item and states to compare.")
+                st.info("Please select a food item to compare trends across states.")
+
+
+            # --- NEW ADDITION: Correlation Heatmap ---
+            st.markdown("---")
+            st.markdown("#### 6. 📊 Food Price Change Correlation Heatmap")
+            st.markdown("This heatmap displays the **correlation coefficients between the month-over-month percentage changes** of different food items. A value close to 1 indicates a strong positive correlation (prices tend to move in the same direction), while a value close to -1 indicates a strong negative correlation (prices tend to move in opposite directions).")
+
+            # Get user input for the time period
+            correlation_time_period = st.radio(
+                "Select Time Period for Correlation:",
+                ('Last 12 Months', 'Last 6 Months', 'Last 3 Months', 'All Available Data'),
+                key="corr_time_period"
+            )
+
+            if not food_data_explorer_filtered.empty:
+                # Pivot the table to have food items as columns and Date as index
+                df_pivot = food_data_explorer_filtered.pivot_table(index='Date', columns='Food_Item', values='Price')
+
+                # Calculate month-over-month percentage change
+                df_returns = df_pivot.pct_change() * 100
+
+                # Filter by selected time period
+                if correlation_time_period == 'Last 12 Months':
+                    df_returns = df_returns[df_returns.index >= (df_returns.index.max() - pd.DateOffset(months=11))]
+                elif correlation_time_period == 'Last 6 Months':
+                    df_returns = df_returns[df_returns.index >= (df_returns.index.max() - pd.DateOffset(months=5))]
+                elif correlation_time_period == 'Last 3 Months':
+                    df_returns = df_returns[df_returns.index >= (df_returns.index.max() - pd.DateOffset(months=2))]
+                # 'All Available Data' means no additional date filtering needed
+
+                if not df_returns.empty:
+                    # Calculate the correlation matrix
+                    correlation_matrix = df_returns.corr()
+
+                    # Create the heatmap
+                    fig_heatmap = px.imshow(
+                        correlation_matrix,
+                        text_auto=True,  # Display correlation values on the heatmap
+                        color_continuous_scale=px.colors.sequential.RdBu, # Use a diverging color scale
+                        range_color=[-1, 1], # Ensure the color scale ranges from -1 to 1
+                        title=f'Correlation Heatmap of Food Price % Change ({correlation_time_period})'
+                    )
+                    fig_heatmap.update_layout(
+                        xaxis_showgrid=False,
+                        yaxis_showgrid=False,
+                        xaxis_tickangle=-45,
+                        height=600, # Adjust height as needed
+                        width=800 # Adjust width as needed
+                    )
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                else:
+                    st.info(f"Not enough data to calculate correlations for the '{correlation_time_period}' period. Try a longer period or check data availability.")
+            else:
+                st.info("No data available to generate correlation heatmap. Please load data first.")
+
+            # 6. Overall Food Price Index (FPI) Trend
+            st.markdown("---")
+            st.markdown("#### ✅ 7. Overall Food Price Index (FPI) Trend")
+            st.markdown("Displays the **overall Food Price Index trend** across Nigeria, providing a general overview of food inflation.")
+            if not st.session_state.df_fpi.empty:
+                df_fpi_filtered = st.session_state.df_fpi[
+                    st.session_state.df_fpi['Year'] >= (datetime.now().year - years_back_explorer)
+                ].copy()
+                
+                df_fpi_avg_nigeria = df_fpi_filtered.groupby('Date')['Price'].mean().reset_index()
+                
+                if not df_fpi_avg_nigeria.empty:
+                    fig_fpi = px.line(
+                        df_fpi_avg_nigeria,
+                        x='Date',
+                        y='Price',
+                        title='Overall Food Price Index (FPI) Trend in Nigeria',
+                        labels={'Price': 'Food Price Index', 'Date': 'Date'},
+                        hover_data={'Price': ':.2f'}
+                    )
+                    fig_fpi.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig_fpi, use_container_width=True)
+                else:
+                    st.info("No Food Price Index data available for the selected period.")
+            else:
+                st.info("Food Price Index data not available.")
+
+# You had an incomplete else statement, adding a placeholder here to complete it.
+            # else:
+            #     st.info("No data available for the selected food items and years in the explorer. Try adjusting filters or loading data.")
