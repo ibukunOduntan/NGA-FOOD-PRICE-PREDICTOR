@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import plotly.express as px
 import json
-import joblib  # for loading models
+import joblib # for loading models
 import numpy as np
 import warnings
 import os
@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # --- Global Configurations / Data Sources ---
 API_URL = "https://microdata.worldbank.org/index.php/api/tables/data/fcv/wld_2021_rtfp_v02_m"
 # TARGET_FOOD_ITEMS will be dynamically populated from API response for Nigeria
-BASE_MODEL_DIR = "models"  # Directory where pre-trained models is stored
+BASE_MODEL_DIR = "models" # Directory where pre-trained models is stored
 
 # Static information about typical WFP units for Nigerian food prices
 WFP_UNITS_INFO = {
@@ -151,7 +151,7 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     avg_fields = [col for col in avg_fields if col in df_clean.columns]
 
     if not avg_fields: # If no columns to average after filtering, return empty
-        return pd.DataFrame(), [], pd.DataFrame()
+        return pd.DataFrame(), [], df_fpi
 
     df_avg = df_clean.groupby(group_cols)[avg_fields].mean().reset_index()
 
@@ -200,7 +200,7 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     return df_long_filtered_to_8, selected_dynamic_food_items_lower, df_fpi
 
 
-@st.cache_data(ttl=3600 * 24)  # Cache for 24 hours
+@st.cache_data(ttl=3600 * 24) # Cache for 24 hours
 def load_geojson():
     try:
         filepath = "ngs.json"
@@ -208,7 +208,7 @@ def load_geojson():
         with open(filepath, "r") as f: return json.load(f)
     except Exception as e: st.error(f"Error loading GeoJSON: {e}"); return None
 
-@st.cache_data(ttl=3600 * 24)  # Cache the final merged dataset for 24 hours
+@st.cache_data(ttl=3600 * 24) # Cache the final merged dataset for 24 hours
 def load_and_merge_all_data_directly(years_back):
     with st.spinner("Loading and preparing data... this might take a moment. 🎉"):
         df_food_prices, dynamic_food_items_lower, df_fpi = fetch_food_prices_from_api(API_URL, 'Nigeria', years_back)
@@ -366,12 +366,10 @@ tab1 = st.tabs(["📊 Data Explorer"])[0]
 
 with tab1:
     st.markdown("Historical price data is pulled from the World Bank Monthly food price estimates API")
-    st.markdown("This tab lets you analyze food price trends, map data, and download cleaned datasets.")
+    st.markdown("This tab lets you analyze food price trends and map data.")
     
     if st.session_state.data_loaded:
         
-        # food_data_explorer_filtered will now automatically only contain the 8 items
-        # because st.session_state.df_food_prices_raw is already filtered
         food_data_explorer_filtered = st.session_state.df_food_prices_raw[
             (st.session_state.df_food_prices_raw['Food_Item'].isin(selected_food_items_explorer)) &
             (st.session_state.df_food_prices_raw['Year'] >= (datetime.now().year - years_back_explorer))
@@ -381,15 +379,10 @@ with tab1:
         if food_data_explorer_filtered.empty and st.session_state.df_fpi.empty:
             st.info("No data available for the selected food items and years in the explorer. Try adjusting filters or loading data.")
         else:
-            st.markdown("#### 📊 Data Quality Check (Food Prices)")
-            st.markdown("This section helps you assess the completeness and reliability of the food price dataset.")
-            total = len(food_data_explorer_filtered)
-            missing_price = food_data_explorer_filtered['Price'].isna().sum()
-            zero_price = (food_data_explorer_filtered['Price'] == 0).sum()
-            st.info(f"Missing prices: {missing_price} | Zero prices: {zero_price} | Total entries: {total}")
-
-            st.markdown("#### 🗺️ Choropleth Map (Food Prices by State)")
-            st.markdown("Visualize food prices by state using a color-coded map. Select a food item and a specific month/year to see the price distribution.")
+            # 1. Choropleth Map of Latest Prices by State
+            st.markdown("---")
+            st.markdown("#### ✅ 1. Choropleth Map of Latest Prices by State")
+            st.markdown("Shows the **price of a selected food item across states for the most recent month**. This helps identify regional price disparities at a glance.")
             nigeria_geojson = load_geojson()
             if nigeria_geojson:
                 try:
@@ -402,71 +395,32 @@ with tab1:
                             key="map_food_select"
                         )
                         if selected_food_for_map:
-                            # Filter data for the selected food item
                             df_selected_food = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == selected_food_for_map]
                             
                             if not df_selected_food.empty:
-                                # Get unique years and months for the selected food item
-                                unique_years = sorted(df_selected_food['Year'].unique(), reverse=True)
-                                
-                                if unique_years:
-                                    # Default to the most recent year
-                                    default_year_idx = 0
-                                    
-                                    selected_year = st.selectbox(
-                                        "Select Year for Map:",
-                                        unique_years,
-                                        index=default_year_idx,
-                                        key="map_year_select"
+                                latest_date = df_selected_food['Date'].max()
+                                df_map_data_current = df_selected_food[df_selected_food['Date'] == latest_date]
+                                df_map_data_final = df_map_data_current.groupby('State')['Price'].mean().reset_index()
+
+                                if not df_map_data_final.empty:
+                                    fig_map = px.choropleth_mapbox(
+                                        df_map_data_final,
+                                        geojson=nigeria_geojson,
+                                        locations='State',
+                                        featureidkey="properties.NAME_1",
+                                        color='Price',
+                                        color_continuous_scale="Viridis",
+                                        mapbox_style="carto-positron",
+                                        zoom=5, center={"lat": 9.0820, "lon": 8.6753},
+                                        opacity=0.7,
+                                        hover_name='State',
+                                        hover_data={'Price': ':.2f'},
+                                        title=f'Price of {selected_food_for_map} by State ({latest_date.strftime("%B %Y")})'
                                     )
-
-                                    df_selected_year = df_selected_food[df_selected_food['Year'] == selected_year]
-                                    unique_months = sorted(df_selected_year['Month'].unique(), reverse=True)
-                                    
-                                    if unique_months:
-                                        # Default to the most recent month for the selected year
-                                        default_month_idx = 0 
-                                        
-                                        selected_month = st.selectbox(
-                                            "Select Month for Map:",
-                                            unique_months,
-                                            index=default_month_idx,
-                                            format_func=lambda x: datetime(selected_year, x, 1).strftime('%B'),
-                                            key="map_month_select"
-                                        )
-
-                                        # Filter for the selected year and month
-                                        df_map_data_current = df_selected_food[
-                                            (df_selected_food['Year'] == selected_year) & 
-                                            (df_selected_food['Month'] == selected_month)
-                                        ]
-                                        
-                                        # Aggregate by state (should be only one value per state for a given month, but good practice)
-                                        df_map_data_final = df_map_data_current.groupby('State')['Price'].mean().reset_index()
-
-                                        if not df_map_data_final.empty:
-                                            fig_map = px.choropleth_mapbox(
-                                                df_map_data_final,
-                                                geojson=nigeria_geojson,
-                                                locations='State',
-                                                featureidkey="properties.NAME_1",
-                                                color='Price',
-                                                color_continuous_scale="Viridis",
-                                                mapbox_style="carto-positron",
-                                                zoom=5, center={"lat": 9.0820, "lon": 8.6753},
-                                                opacity=0.7,
-                                                hover_name='State',
-                                                hover_data={'Price': ':.2f'},
-                                                title=f'Price of {selected_food_for_map} by State ({datetime(selected_year, selected_month, 1).strftime("%B %Y")})'
-                                            )
-                                            fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
-                                            st.plotly_chart(fig_map, use_container_width=True)
-                                        else:
-                                            st.info(f"No price data available for {selected_food_for_map} in {datetime(selected_year, selected_month, 1).strftime('%B %Y')}.")
-                                    else:
-                                        st.info(f"No month data available for {selected_food_for_map} in {selected_year}.")
+                                    fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+                                    st.plotly_chart(fig_map, use_container_width=True)
                                 else:
-                                    st.info(f"No year data available for {selected_food_for_map}.")
+                                    st.info(f"No price data available for {selected_food_for_map} for the latest month.")
                             else:
                                 st.info(f"No data available for the selected food item '{selected_food_for_map}'.")
                         else:
@@ -478,219 +432,203 @@ with tab1:
             else:
                 st.warning("Cannot display map: GeoJSON data not loaded.")
 
-            # New: Price Trend Over Time for a Selected Food Item (Average Across States)
-            st.markdown("---")  
-            st.markdown("#### 📈 Average Price Trend Over Time for a Food Item (Across All States)")
-            st.markdown("Select a food item to view its average price trend across all states for the set time period.")
-
-            # The list st.session_state.capitalized_food_items now *only* contains the first 8
-            food_item_for_avg_trend = st.selectbox(
-                "Select Food Item to view average trend:",
+            # 2. Line Chart of Monthly Price Trends (Per State or Nationwide)
+            st.markdown("---")
+            st.markdown("#### ✅ 2. Line Chart of Monthly Price Trends (Per State or Nationwide)")
+            st.markdown("Shows **how prices for a selected food item change over time**. Users can select a state to compare with the national average or other states.")
+            
+            trend_food_item = st.selectbox(
+                "Select Food Item for Trend Analysis:",
                 st.session_state.capitalized_food_items,
-                key="food_item_avg_trend_select"
+                key="trend_food_item_select"
             )
 
-            if food_item_for_avg_trend:
-                df_avg_food_price_trend = food_data_explorer_filtered[
-                    food_data_explorer_filtered['Food_Item'] == food_item_for_avg_trend
-                ].groupby('Date')['Price'].mean().reset_index()
+            trend_states = ['Nationwide Average'] + sorted(food_data_explorer_filtered['State'].unique().tolist())
+            selected_trend_state = st.selectbox(
+                "Select State for Trend Analysis:",
+                trend_states,
+                key="trend_state_select"
+            )
 
-                if not df_avg_food_price_trend.empty:
-                    # Dynamically adjust Y-axis label based on the selected food item's general unit
-                    unit_for_display = WFP_UNITS_INFO.get(food_item_for_avg_trend, "Unit N/A").replace("~", "") # Remove approx symbol
-                    y_axis_label = f'Average Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Average Price (Naira)'
-
-                    fig_avg_trend = px.line(
-                        df_avg_food_price_trend,
+            if trend_food_item:
+                df_trend = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == trend_food_item].copy()
+                
+                if selected_trend_state == 'Nationwide Average':
+                    df_plot = df_trend.groupby('Date')['Price'].mean().reset_index()
+                    title = f'National Average Price Trend for {trend_food_item} Over Time'
+                else:
+                    df_plot = df_trend[df_trend['State'] == selected_trend_state].groupby('Date')['Price'].mean().reset_index()
+                    title = f'Price Trend for {trend_food_item} in {selected_trend_state} Over Time'
+                
+                if not df_plot.empty:
+                    unit_for_display = WFP_UNITS_INFO.get(trend_food_item, "Unit N/A").replace("~", "")
+                    y_axis_label = f'Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Price (Naira)'
+                    
+                    fig_trend = px.line(
+                        df_plot,
                         x='Date',
                         y='Price',
-                        title=f'Average Price of {food_item_for_avg_trend} Over Time (Across All States)',
+                        title=title,
                         labels={'Price': y_axis_label, 'Date': 'Date'},
                         hover_data={'Price': ':.2f'}
                     )
-                    fig_avg_trend.update_layout(hovermode="x unified")
-                    st.plotly_chart(fig_avg_trend, use_container_width=True)
+                    fig_trend.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig_trend, use_container_width=True)
                 else:
-                    st.info(f"No data available for {food_item_for_avg_trend} to show average trend.")
+                    st.info(f"No data available for {trend_food_item} in {selected_trend_state}.")
             else:
-                st.info("Please select a food item to view its average price trend.")
+                st.info("Please select a food item to view its trend.")
 
-            # New: Average Food Price Trend Across User Set Time Period for Each State
-            st.markdown("---")  
-            st.markdown("#### 📊 Average Food Price Trend for Each State (All Food Items)")
-            st.markdown("Select a state to view the price trends of all food items within that state over the set time period.")
-
-            available_states = food_data_explorer_filtered['State'].unique().tolist()
-            state_for_multi_line_trend = st.selectbox(
-                "Select a State to view multi-line trend:",
-                available_states,
-                key="state_multi_line_trend_select"
-            )
-
-            if state_for_multi_line_trend:
-                df_state_food_prices = food_data_explorer_filtered[
-                    food_data_explorer_filtered['State'] == state_for_multi_line_trend
-                ]
-
-                if not df_state_food_prices.empty:
-                    fig_state_trend = px.line(
-                        df_state_food_prices,
-                        x='Date',
-                        y='Price',
-                        color='Food_Item',
-                        title=f'Food Price Trends in {state_for_multi_line_trend} Over Time',
-                        labels={'Price': 'Price (Naira)', 'Date': 'Date'},
-                        hover_data={'Food_Item': True, 'Price': ':.2f'} # Removed 'Unit' as it's no longer in df_long
-                    )
-                    fig_state_trend.update_layout(hovermode="x unified")
-                    st.plotly_chart(fig_state_trend, use_container_width=True)
-                else:
-                    st.info(f"No data available for {state_for_multi_line_trend} to show food price trends.")
-            else:
-                st.info("Please select a state to view its food price trends.")
-
-            # New: Correlation Plot of Food Prices
-            st.markdown("---")  
-            st.markdown("#### 🤝 Food Price Correlation Plot")
-            st.markdown("Understand how the average price *changes* of different food items (across all states) correlate with each other. A higher correlation (closer to 1 or -1) indicates a stronger relationship in their proportional movements.")
-
-            df_correlation_prep = food_data_explorer_filtered.copy()
-            df_correlation_prep['Date'] = pd.to_datetime(df_correlation_prep['Year'].astype(str) + '-' + df_correlation_prep['Month'].astype(str) + '-01')
-            df_avg_prices = df_correlation_prep.groupby(['Date', 'Food_Item'])['Price'].mean().reset_index()
-            df_wide_avg_prices = df_avg_prices.pivot_table(
-                index='Date',
-                columns='Food_Item',
-                values='Price'
-            )
-            df_returns_avg = df_wide_avg_prices.pct_change().dropna()
-
-            # Now, selected_food_items_explorer will already contain only the 8 filtered items
-            required_columns_for_correlation = set(selected_food_items_explorer)
-            current_columns_in_returns = set(df_returns_avg.columns)
-
-            # This check is less critical now as `selected_food_items_explorer` is already limited to 8.
-            # It mainly checks if *all* of those 8 are actually present in the `df_returns_avg`.
-            if not df_returns_avg.empty and len(df_returns_avg.columns) > 1 and required_columns_for_correlation.issubset(current_columns_in_returns):
-                return_corr_matrix = df_returns_avg.corr()
-
-                fig_corr = px.imshow(
-                    return_corr_matrix,
-                    text_auto=True,
-                    color_continuous_scale=px.colors.sequential.Viridis,
-                    title='Average Price Change Correlation Between Food Items'
-                )
-                st.plotly_chart(fig_corr, use_container_width=True)
-
-                st.markdown("##### Smart Insights on Correlation:")
-                np.fill_diagonal(return_corr_matrix.values, np.nan)  
-
-                threshold = 0.75
-                max_pairs = 2
-
-                most_correlated = return_corr_matrix.stack().nlargest(20).index.tolist()  
-
-                top_pairs = []
-                seen_pairs = set()
-
-                for idx in most_correlated:
-                    item1, item2 = idx
-                    if item1 != item2 and frozenset({item1, item2}) not in seen_pairs:
-                        corr_val = return_corr_matrix.loc[item1, item2]
-                        if corr_val >= threshold:
-                            top_pairs.append((item1, item2, corr_val))
-                            seen_pairs.add(frozenset({item1, item2}))
-                        if len(top_pairs) >= max_pairs:
-                            break
-
-                if top_pairs:
-                    for item1, item2, corr_val in top_pairs:
-                        st.info(f"**Most Correlated:** **{item1}** and **{item2}** show a strong positive correlation of **{corr_val:.2f}**. This suggests their average prices across states tend to move in the same direction, possibly due to shared market factors, supply chain, or substitutability.")
-                else:
-                    st.info(f"No strong positive correlations (>={threshold}) found between distinct food items in their average price changes.")
-
-                least_correlated = return_corr_matrix.stack().nsmallest(2).index.tolist()
-                if least_correlated:
-                    bottom_pairs = []
-                    seen_pairs_bottom = set()
-                    for idx in least_correlated:
-                        item1, item2 = idx
-                        if item1 != item2 and frozenset({item1, item2}) not in seen_pairs_bottom:
-                            bottom_pairs.append((item1, item2, return_corr_matrix.loc[item1, item2]))
-                            seen_pairs_bottom.add(frozenset({item1, item2}))
-                        if len(bottom_pairs) >= 1:  
-                            break
-                    if bottom_pairs:
-                        item1, item2, corr_val = bottom_pairs[0]
-                        st.info(f"**Least Correlated (or Negatively Correlated):** **{item1}** and **{item2}** have a correlation of **{corr_val:.2f}**. A value close to zero or negative indicates little to no linear relationship, or an inverse relationship, suggesting their average price changes are largely independent.")
-                    else:
-                        st.info("No distinct food items found with very low or negative correlations in their average price changes.")
-                else:
-                    st.info("Not enough distinct food items selected to determine least correlation.")
-            else:
-                if df_returns_avg.empty:
-                    st.info("Not enough data with sufficient history to calculate meaningful average price change correlations. Please ensure you have selected enough years and food items.")
-                else:
-                    missing_items = required_columns_for_correlation - current_columns_in_returns
-                    st.info(f"Correlation plot for *all* target food items is shown only when data for every selected item is available. Missing: {', '.join(missing_items)}")
-
+            # 3. Bar Chart: Top 10 Most Expensive States (Latest Month)
             st.markdown("---")
-            st.markdown("#### 📈 Food Price Index Trend")
-            st.markdown("This chart shows the trend of the Food Price Index over time across different states.")
+            st.markdown("#### ✅ 3. Bar Chart: Top 10 Most Expensive States (Latest Month)")
+            st.markdown("Shows **which states have the highest prices for a selected item** for the latest available month. This is good for comparing at a glance without the map.")
 
-            if not st.session_state.df_fpi.empty:
-                df_fpi_filtered = st.session_state.df_fpi[
-                    (st.session_state.df_fpi['Year'] >= (datetime.now().year - years_back_explorer))
+            bar_chart_food_item = st.selectbox(
+                "Select Food Item for Top States Bar Chart:",
+                st.session_state.capitalized_food_items,
+                key="bar_food_item_select"
+            )
+
+            if bar_chart_food_item:
+                df_bar_data = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == bar_chart_food_item].copy()
+                if not df_bar_data.empty:
+                    latest_date_bar = df_bar_data['Date'].max()
+                    df_bar_latest_month = df_bar_data[df_bar_data['Date'] == latest_date_bar].copy()
+                    
+                    # Group by state and get the average price for the latest month
+                    df_bar_grouped = df_bar_latest_month.groupby('State')['Price'].mean().reset_index()
+                    df_top_10_expensive = df_bar_grouped.nlargest(10, 'Price')
+
+                    if not df_top_10_expensive.empty:
+                        unit_for_display = WFP_UNITS_INFO.get(bar_chart_food_item, "Unit N/A").replace("~", "")
+                        x_axis_label = f'Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Price (Naira)'
+                        
+                        fig_bar = px.bar(
+                            df_top_10_expensive,
+                            x='Price',
+                            y='State',
+                            orientation='h',
+                            title=f'Top 10 Most Expensive States for {bar_chart_food_item} ({latest_date_bar.strftime("%B %Y")})',
+                            labels={'Price': x_axis_label, 'State': 'State'},
+                            color='Price',
+                            color_continuous_scale="Viridis"
+                        )
+                        fig_bar.update_layout(yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig_bar, use_container_width=True)
+                    else:
+                        st.info(f"No states found for {bar_chart_food_item} for the latest month.")
+                else:
+                    st.info(f"No data available for {bar_chart_food_item} to show top expensive states.")
+            else:
+                st.info("Please select a food item for the bar chart.")
+
+            # 4. Choropleth Map of Monthly Price Change (% Change)
+            st.markdown("---")
+            st.markdown("#### ✅ 4. Choropleth Map of Monthly Price Change (% Change)")
+            st.markdown("Shows **month-over-month or year-over-year percentage change in price**, color-coded to highlight where prices are rising or falling fastest.")
+
+            change_food_item = st.selectbox(
+                "Select Food Item for Price Change Map:",
+                st.session_state.capitalized_food_items,
+                key="change_map_food_select"
+            )
+
+            change_type = st.radio(
+                "Select Change Type:",
+                ('Month-over-Month', 'Year-over-Year'),
+                key="change_type_radio"
+            )
+
+            if change_food_item and nigeria_geojson:
+                df_change_data = food_data_explorer_filtered[food_data_explorer_filtered['Food_Item'] == change_food_item].copy()
+                df_change_data = df_change_data.sort_values(by=['State', 'Date'])
+                
+                if not df_change_data.empty:
+                    df_change_data['Price_Lagged'] = df_change_data.groupby('State')['Price'].shift(1 if change_type == 'Month-over-Month' else 12)
+                    df_change_data['Price_Change_Pct'] = ((df_change_data['Price'] - df_change_data['Price_Lagged']) / df_change_data['Price_Lagged']) * 100
+                    
+                    # Get the latest date for which change can be calculated
+                    latest_date_with_change = df_change_data.dropna(subset=['Price_Change_Pct'])['Date'].max()
+
+                    if pd.isna(latest_date_with_change):
+                        st.info(f"Not enough historical data to calculate {change_type} price change for {change_food_item}.")
+                    else:
+                        df_map_change_current = df_change_data[df_change_data['Date'] == latest_date_with_change].copy()
+                        df_map_change_final = df_map_change_current.groupby('State')['Price_Change_Pct'].mean().reset_index()
+
+                        if not df_map_change_final.empty:
+                            fig_change_map = px.choropleth_mapbox(
+                                df_map_change_final,
+                                geojson=nigeria_geojson,
+                                locations='State',
+                                featureidkey="properties.NAME_1",
+                                color='Price_Change_Pct',
+                                color_continuous_scale="RdBu", # Red for increase, Blue for decrease
+                                mapbox_style="carto-positron",
+                                zoom=5, center={"lat": 9.0820, "lon": 8.6753},
+                                opacity=0.7,
+                                hover_name='State',
+                                hover_data={'Price_Change_Pct': ':.2f%'},
+                                title=f'{change_type} Price Change for {change_food_item} ({latest_date_with_change.strftime("%B %Y")})'
+                            )
+                            fig_change_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+                            st.plotly_chart(fig_change_map, use_container_width=True)
+                        else:
+                            st.info(f"No price change data available for {change_food_item} for the selected period.")
+                else:
+                    st.info(f"No data available for {change_food_item} to calculate price change.")
+            elif not nigeria_geojson:
+                st.warning("Cannot display map: GeoJSON data not loaded.")
+            else:
+                st.info("Please select a food item for the price change map.")
+
+            # 5. Multi-line Chart: Compare Price Trends Across Multiple States
+            st.markdown("---")
+            st.markdown("#### ✅ 5. Multi-line Chart: Compare Price Trends Across Multiple States")
+            st.markdown("Shows **lines for 2-4 user-selected states for a selected food item**. This helps track how different regions are experiencing inflation differently.")
+
+            multi_state_food_item = st.selectbox(
+                "Select Food Item to Compare Across States:",
+                st.session_state.capitalized_food_items,
+                key="multi_state_food_select"
+            )
+
+            available_states_for_compare = sorted(food_data_explorer_filtered['State'].unique().tolist())
+            selected_states_to_compare = st.multiselect(
+                "Select 2-4 States to Compare:",
+                available_states_for_compare,
+                default=available_states_for_compare[:2] if len(available_states_for_compare) >= 2 else [],
+                max_selections=4,
+                key="multi_state_select"
+            )
+
+            if multi_state_food_item and len(selected_states_to_compare) >= 2:
+                df_compare = food_data_explorer_filtered[
+                    (food_data_explorer_filtered['Food_Item'] == multi_state_food_item) &
+                    (food_data_explorer_filtered['State'].isin(selected_states_to_compare))
                 ].copy()
 
-                fpi_states = df_fpi_filtered['State'].unique().tolist()
-                
-                # ONLY show the multiselect if there are states available AFTER filtering by year
-                if fpi_states:  
-                    selected_fpi_states = st.multiselect(
-                        "Select states to view FPI trend:",
-                        options=fpi_states,
-                        default=fpi_states[:6]  # limit for better visibility
-                    )
+                if not df_compare.empty:
+                    df_compare_plot = df_compare.groupby(['Date', 'State'])['Price'].mean().reset_index()
                     
-                    df_fpi_filtered = df_fpi_filtered[df_fpi_filtered['State'].isin(selected_fpi_states)]
+                    unit_for_display = WFP_UNITS_INFO.get(multi_state_food_item, "Unit N/A").replace("~", "")
+                    y_axis_label = f'Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Price (Naira)'
 
-                    if not df_fpi_filtered.empty:
-                        fig_fpi = px.line(
-                            df_fpi_filtered,
-                            x='Date',
-                            y='Price',
-                            color='State',
-                            title='Food Price Index Over Time by State',
-                            labels={'Price': 'Food Price Index', 'Date': 'Date'},
-                            hover_data={'State': True, 'Price': ':.2f'}
-                        )
-                        fig_fpi.update_layout(hovermode="x unified")
-                        st.plotly_chart(fig_fpi, use_container_width=True)
-                    else:
-                        st.info("No Food Price Index data available for the selected states and time period.")
+                    fig_multi_line = px.line(
+                        df_compare_plot,
+                        x='Date',
+                        y='Price',
+                        color='State',
+                        title=f'Price Trends for {multi_state_food_item} Across Selected States',
+                        labels={'Price': y_axis_label, 'Date': 'Date'},
+                        hover_data={'Price': ':.2f', 'State': True}
+                    )
+                    fig_multi_line.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig_multi_line, use_container_width=True)
                 else:
-                    st.info("No Food Price Index data available for the selected time period to display states.")
+                    st.info(f"No data available for {multi_state_food_item} in the selected states.")
+            elif multi_state_food_item and len(selected_states_to_compare) < 2:
+                st.info("Please select at least 2 states to compare their price trends.")
             else:
-                st.info("No Food Price Index data found in the dataset.")
-
-            # Raw Data Display and Download
-            st.markdown("---")  
-            st.markdown("#### ⬇️ Raw Data & Download")
-            st.markdown("View the raw data used for analysis and download it.")
-
-            csv_data = food_data_explorer_filtered.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download Food Prices Data as CSV",
-                data=csv_data,
-                file_name="nigerian_food_prices_explorer_data.csv",
-                mime="text/csv",
-            )
-            
-            if not st.session_state.df_fpi.empty:
-                csv_fpi_data = st.session_state.df_fpi.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download Food Price Index Data as CSV",
-                    data=csv_fpi_data,
-                    file_name="nigerian_food_price_index_data.csv",
-                    mime="text/csv",
-                )
+                st.info("Please select a food item and states to compare.")
