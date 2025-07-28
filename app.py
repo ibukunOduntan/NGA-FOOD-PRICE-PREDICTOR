@@ -184,6 +184,9 @@ def fetch_food_prices_from_api(api_url, country='Nigeria', years_back=10):
     df_long.sort_values(by=['State', 'Year', 'Month', 'Food_Item'], inplace=True)
     df_long.reset_index(drop=True, inplace=True)
 
+    # Add 'Date' column to df_long
+    df_long['Date'] = pd.to_datetime(df_long['Year'].astype(str) + '-' + df_long['Month'].astype(str) + '-01')
+
     df_long = df_long[df_long['State'] != 'Market Average']
     if not df_fpi.empty:
         df_fpi = df_fpi[df_fpi['State'] != 'Market Average']
@@ -218,7 +221,8 @@ def load_and_merge_all_data_directly(years_back):
             return pd.DataFrame(), pd.DataFrame(), [], pd.DataFrame()
 
         df_merged = df_food_prices.copy()
-        df_merged['Date'] = pd.to_datetime(df_merged['Year'].astype(str) + '-' + df_merged['Month'].astype(str) + '-01')
+        # The 'Date' column is now created within fetch_food_prices_from_api for df_food_prices
+        # df_merged['Date'] = pd.to_datetime(df_merged['Year'].astype(str) + '-' + df_merged['Month'].astype(str) + '-01')
 
         if not df_fpi.empty:
             df_fpi['Date'] = pd.to_datetime(df_fpi['Year'].astype(str) + '-' + df_fpi['Month'].astype(str) + '-01')
@@ -378,7 +382,8 @@ with tab1:
             (st.session_state.df_food_prices_raw['Food_Item'].isin(selected_food_items_explorer)) &
             (st.session_state.df_food_prices_raw['Year'] >= (datetime.now().year - years_back_explorer))
         ].copy()
-        food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered['Year'].astype(str) + '-' + food_data_explorer_filtered['Month'].astype(str) + '-01')
+        # The 'Date' column is now created within fetch_food_prices_from_api, so this line is redundant
+        # food_data_explorer_filtered['Date'] = pd.to_datetime(food_data_explorer_filtered['Year'].astype(str) + '-' + food_data_explorer_filtered['Month'].astype(str) + '-01')
 
         if food_data_explorer_filtered.empty and st.session_state.df_fpi.empty:
             st.info("No data available for the selected food items and years in the explorer. Try adjusting filters or loading data.")
@@ -624,90 +629,97 @@ with tab1:
 
                 if not df_compare.empty:
                     df_compare_plot = df_compare.groupby(['Date', 'State'])['Price'].mean().reset_index()
-                    
                     unit_for_display = WFP_UNITS_INFO.get(multi_state_food_item, "Unit N/A").replace("~", "")
                     y_axis_label = f'Price (Naira / {unit_for_display})' if unit_for_display != "Unit N/A" else 'Price (Naira)'
-
-                    fig_multi_line = px.line(
+                    
+                    fig_compare = px.line(
                         df_compare_plot,
                         x='Date',
                         y='Price',
                         color='State',
                         title=f'Price Trends for {multi_state_food_item} Across Selected States',
                         labels={'Price': y_axis_label, 'Date': 'Date'},
-                        hover_data={'Price': ':.2f', 'State': True}
+                        hover_data={'Price': ':.2f'}
                     )
-                    fig_multi_line.update_layout(hovermode="x unified")
-                    st.plotly_chart(fig_multi_line, use_container_width=True)
+                    fig_compare.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig_compare, use_container_width=True)
                 else:
-                    st.info(f"No data available for {multi_state_food_item} in the selected states for the chosen period.")
+                    st.info(f"No data available for {multi_state_food_item} in the selected states.")
+            elif multi_state_food_item and len(selected_states_to_compare) < 2:
+                st.info("Please select at least two states to compare.")
             else:
-                st.info("Please select a food item and at least two states to compare.")
+                st.info("Please select a food item and at least two states for comparison.")
 
- # 6. Correlation Heatmap
+            # 6. Correlation Heatmap
             st.markdown("---")
-            st.markdown("#### ✅ 6. Correlation Heatmap of Food Item Price Changes")
-            st.markdown("Displays a **heatmap showing the correlations between the price changes of different food items** over the past 12 months. This helps identify which food items tend to move in price together.")
+            st.markdown("#### ✅ 6. Correlation Heatmap")
+            st.markdown("Visualizes the **correlation between different food item prices nationwide**. This helps understand which food prices tend to move together, indicating potential supply chain or economic linkages.")
 
-            # Filter data for the last 12 months for correlation
-            current_date = datetime.now()
-            start_date_correlation = current_date - pd.DateOffset(months=12)
+            if not st.session_state.df_food_prices_raw.empty:
+                # Filter for the last X years for correlation
+                start_date_correlation = datetime.now() - pd.DateOffset(years=years_back_explorer)
+                
+                # Ensure 'Date' column exists in df_food_prices_raw
+                # This check is now redundant if the fix in fetch_food_prices_from_api is applied
+                if 'Date' not in st.session_state.df_food_prices_raw.columns:
+                    st.session_state.df_food_prices_raw['Date'] = pd.to_datetime(
+                        st.session_state.df_food_prices_raw['Year'].astype(str) + '-' +
+                        st.session_state.df_food_prices_raw['Month'].astype(str) + '-01'
+                    )
 
-            df_correlation_period = st.session_state.df_food_prices_raw[
-                (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation) &
-                (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
-            ].copy()
+                df_correlation = st.session_state.df_food_prices_raw[
+                    (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation) &
+                    (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
+                ].copy()
 
-            if not df_correlation_period.empty:
-                # Pivot the table to have food items as columns and Date as index
-                df_pivot = df_correlation_period.pivot_table(index='Date', columns='Food_Item', values='Price', aggfunc='mean')
-
-                # Calculate monthly percentage change
-                df_pct_change = df_pivot.pct_change().dropna()
-
-                if not df_pct_change.empty:
+                if not df_correlation.empty:
+                    # Pivot to get prices of different food items as columns
+                    df_pivot = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price', aggfunc='mean')
+                    
                     # Calculate the correlation matrix
-                    correlation_matrix = df_pct_change.corr()
+                    correlation_matrix = df_pivot.corr()
 
-                    fig_corr_heatmap = px.imshow(
+                    fig_corr = px.imshow(
                         correlation_matrix,
                         text_auto=True,
                         aspect="auto",
                         color_continuous_scale="RdBu",
-                        title="Correlation Heatmap of Food Item Price Changes (Last 12 Months)"
+                        title=f'Correlation Heatmap of Food Prices (Last {years_back_explorer} Years)'
                     )
-                    st.plotly_chart(fig_corr_heatmap, use_container_width=True)
-
-                    # Smart Insight Section for Correlation
-                    st.markdown("---")
-                    st.markdown("#### ✨ Smart Insight: Food Item Correlation Analysis")
-                    st.markdown("This section dynamically updates to show which food items have the highest and lowest correlations in their price changes over the last 12 months.")
-
-                    # Exclude self-correlation (which is always 1)
-                    np.fill_diagonal(correlation_matrix.values, np.nan)
-
-                    if not correlation_matrix.empty:
-                        # Get highest correlations
-                        highest_corr = correlation_matrix.unstack().sort_values(ascending=False).drop_duplicates()
-                        highest_corr = highest_corr[highest_corr < 1].head(5) # Top 5 non-self correlations
-
-                        # Get lowest correlations (most negative)
-                        lowest_corr = correlation_matrix.unstack().sort_values(ascending=True).drop_duplicates()
-                        lowest_corr = lowest_corr.head(5) # Bottom 5 correlations
-
-                        st.write("##### Top 5 Highest Correlations:")
-                        for (item1, item2), corr_value in highest_corr.items():
-                            st.write(f"- **{item1}** and **{item2}**: {corr_value:.2f}")
-
-                        st.write("##### Top 5 Lowest Correlations:")
-                        for (item1, item2), corr_value in lowest_corr.items():
-                            st.write(f"- **{item1}** and **{item2}**: {corr_value:.2f}")
-                    else:
-                        st.info("Not enough data to calculate correlations for smart insights.")
+                    st.plotly_chart(fig_corr, use_container_width=True)
                 else:
-                    st.info("Not enough data points (less than 2 months) in the last 12 months to calculate price changes for correlation.")
+                    st.info("Not enough data to calculate correlations for the selected period and food items.")
             else:
-                st.info("No data available for the selected food items in the last 12 months to calculate correlations.")
+                st.info("Load data first to see the correlation heatmap.")
+
+            # 7. Food Price Index (FPI) Trend
+            st.markdown("---")
+            st.markdown("#### ✅ 7. Food Price Index (FPI) Trend")
+            st.markdown("Displays the **overall Food Price Index (FPI) trend** for Nigeria, providing a macroeconomic view of food inflation.")
+
+            if not st.session_state.df_fpi.empty:
+                df_fpi_filtered = st.session_state.df_fpi[
+                    st.session_state.df_fpi['Year'] >= (datetime.now().year - years_back_explorer)
+                ].copy()
+
+                if not df_fpi_filtered.empty:
+                    fig_fpi = px.line(
+                        df_fpi_filtered.groupby('Date')['Price'].mean().reset_index(),
+                        x='Date',
+                        y='Price',
+                        title='National Food Price Index (FPI) Trend Over Time',
+                        labels={'Price': 'Food Price Index (Index Points)', 'Date': 'Date'},
+                        hover_data={'Price': ':.2f'}
+                    )
+                    fig_fpi.update_layout(hovermode="x unified")
+                    st.plotly_chart(fig_fpi, use_container_width=True)
+                else:
+                    st.info("No Food Price Index data available for the selected period.")
+            else:
+                st.info("No Food Price Index data loaded.")
 
     else:
-        st.info("Please click 'Load All Data' in the sidebar to begin analysis.")
+        st.info("Please click 'Load All Data' in the sidebar to begin exploring the data.")
+
+st.markdown("---")
+st.markdown("Developed by [Your Name/Organization Here]")
