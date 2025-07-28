@@ -643,3 +643,71 @@ with tab1:
                     st.info(f"No data available for {multi_state_food_item} in the selected states for the chosen period.")
             else:
                 st.info("Please select a food item and at least two states to compare.")
+
+ # 6. Correlation Heatmap
+            st.markdown("---")
+            st.markdown("#### ✅ 6. Correlation Heatmap of Food Item Price Changes")
+            st.markdown("Displays a **heatmap showing the correlations between the price changes of different food items** over the past 12 months. This helps identify which food items tend to move in price together.")
+
+            # Filter data for the last 12 months for correlation
+            current_date = datetime.now()
+            start_date_correlation = current_date - pd.DateOffset(months=12)
+
+            df_correlation_period = st.session_state.df_food_prices_raw[
+                (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation) &
+                (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
+            ].copy()
+
+            if not df_correlation_period.empty:
+                # Pivot the table to have food items as columns and Date as index
+                df_pivot = df_correlation_period.pivot_table(index='Date', columns='Food_Item', values='Price', aggfunc='mean')
+
+                # Calculate monthly percentage change
+                df_pct_change = df_pivot.pct_change().dropna()
+
+                if not df_pct_change.empty:
+                    # Calculate the correlation matrix
+                    correlation_matrix = df_pct_change.corr()
+
+                    fig_corr_heatmap = px.imshow(
+                        correlation_matrix,
+                        text_auto=True,
+                        aspect="auto",
+                        color_continuous_scale="RdBu",
+                        title="Correlation Heatmap of Food Item Price Changes (Last 12 Months)"
+                    )
+                    st.plotly_chart(fig_corr_heatmap, use_container_width=True)
+
+                    # Smart Insight Section for Correlation
+                    st.markdown("---")
+                    st.markdown("#### ✨ Smart Insight: Food Item Correlation Analysis")
+                    st.markdown("This section dynamically updates to show which food items have the highest and lowest correlations in their price changes over the last 12 months.")
+
+                    # Exclude self-correlation (which is always 1)
+                    np.fill_diagonal(correlation_matrix.values, np.nan)
+
+                    if not correlation_matrix.empty:
+                        # Get highest correlations
+                        highest_corr = correlation_matrix.unstack().sort_values(ascending=False).drop_duplicates()
+                        highest_corr = highest_corr[highest_corr < 1].head(5) # Top 5 non-self correlations
+
+                        # Get lowest correlations (most negative)
+                        lowest_corr = correlation_matrix.unstack().sort_values(ascending=True).drop_duplicates()
+                        lowest_corr = lowest_corr.head(5) # Bottom 5 correlations
+
+                        st.write("##### Top 5 Highest Correlations:")
+                        for (item1, item2), corr_value in highest_corr.items():
+                            st.write(f"- **{item1}** and **{item2}**: {corr_value:.2f}")
+
+                        st.write("##### Top 5 Lowest Correlations:")
+                        for (item1, item2), corr_value in lowest_corr.items():
+                            st.write(f"- **{item1}** and **{item2}**: {corr_value:.2f}")
+                    else:
+                        st.info("Not enough data to calculate correlations for smart insights.")
+                else:
+                    st.info("Not enough data points (less than 2 months) in the last 12 months to calculate price changes for correlation.")
+            else:
+                st.info("No data available for the selected food items in the last 12 months to calculate correlations.")
+
+    else:
+        st.info("Please click 'Load All Data' in the sidebar to begin analysis.")
