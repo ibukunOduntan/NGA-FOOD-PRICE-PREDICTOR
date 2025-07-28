@@ -32,7 +32,7 @@ WFP_UNITS_INFO = {
     'Sorghum': '100 KG',
     'Cassava_meal': '100 KG', # Note: API might return 'cassava_meal'
     'Beans (white)': '2.5 KG',
-    'Rice': '50 KG',
+    'Rice (imported)': '2.8 KG',
     'Millet': '100 KG',
     'Yam': '1 KG',
     'Fish': 'KG', # General, specific type might vary
