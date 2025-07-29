@@ -648,74 +648,115 @@ with tab1:
             else:
                 st.info("Please select a food item and at least two states for comparison.")
 
-            # 6. Correlation Heatmap
+           # 6. Correlation Heatmap
             st.markdown("---")
             st.markdown("#### ✅ 6. Correlation Heatmap")
-            st.markdown("Visualizes the **correlation between different food item prices nationwide** for the **last 1 year**. This helps understand which food prices tend to move together, indicating potential supply chain or economic linkages.")
+            st.markdown("Visualizes the **correlation between different food item price *changes*** for the **last 1 year**. This helps understand which food prices tend to move together, indicating potential supply chain or economic linkages.")
 
             if not st.session_state.df_food_prices_raw.empty:
                 # Filter for the last 1 year specifically for correlation
                 start_date_correlation_1yr = datetime.now() - pd.DateOffset(years=1)
-                
-                df_correlation = st.session_state.df_food_prices_raw[
+
+                # Get unique states from the food_data_explorer_filtered if it exists, otherwise from df_food_prices_raw
+                # Ensure the states dropdown only shows states with data for the selected food items over the last year
+                available_states_for_correlation = sorted(st.session_state.df_food_prices_raw[
+                    (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation_1yr) &
+                    (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
+                ]['State'].unique().tolist())
+
+                correlation_state_options = ['Nationwide Average'] + available_states_for_correlation
+
+                selected_correlation_state = st.selectbox(
+                    "Select State for Correlation Analysis:",
+                    correlation_state_options,
+                    key="correlation_state_select"
+                )
+
+                df_correlation_base = st.session_state.df_food_prices_raw[
                     (st.session_state.df_food_prices_raw['Date'] >= start_date_correlation_1yr) &
                     (st.session_state.df_food_prices_raw['Food_Item'].isin(st.session_state.capitalized_food_items))
                 ].copy()
 
+                if selected_correlation_state != 'Nationwide Average':
+                    df_correlation = df_correlation_base[df_correlation_base['State'] == selected_correlation_state].copy()
+                    title_suffix = f' in {selected_correlation_state}'
+                else:
+                    # For nationwide, we need to average prices by date and food item first across states
+                    df_correlation = df_correlation_base.groupby(['Date', 'Food_Item'])['Price'].mean().reset_index()
+                    title_suffix = ' Nationwide'
+
                 if not df_correlation.empty:
-
-                    # Example of how month-on-month change would be calculated
+                    # Calculate month-on-month percentage change for each food item within the selected scope (state or nationwide)
+                    # We need to ensure that the pct_change is applied correctly per Food_Item.
+                    # If it's nationwide, df_correlation is already aggregated by Food_Item.
+                    # If it's by state, it should already be structured for pct_change per Food_Item per State.
+                    
+                    # Sort by Date before calculating pct_change to ensure correct order
+                    df_correlation = df_correlation.sort_values(by=['Food_Item', 'Date'])
                     df_correlation['Price_Change'] = df_correlation.groupby('Food_Item')['Price'].pct_change() * 100
-                    # Then pivot on 'Price_Change' instead of 'Price'
-                    df_pivot_change = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price_Change', aggfunc='mean')
-                    # Pivot to get prices of different food items as columns                    
-                    if df_pivot_change.shape[1] < 2: # Check if there are at least two food items to correlate
-                        st.info("Not enough distinct food items with data in the last year to calculate correlations.")
+
+                    # Pivot to get price changes of different food items as columns
+                    df_pivot = df_correlation.pivot_table(index='Date', columns='Food_Item', values='Price_Change')
+
+                    # Drop any rows where all price changes are NaN (e.g., the first month's data after pct_change)
+                    df_pivot.dropna(how='all', inplace=True)
+
+                    if df_pivot.shape[1] < 2:
+                        st.info("Not enough distinct food items with sufficient price change data to calculate correlations for the selected period and location.")
                     else:
-                        # Calculate the correlation matrix
-                        correlation_matrix_change = df_pivot_change.corr()
+                        # Calculate the correlation matrix. Use min_periods to ensure reliability.
+                        # A minimum of 6 observations (months) is a reasonable starting point for correlation reliability
+                        correlation_matrix = df_pivot.corr(min_periods=6)
 
+                        # Drop columns/rows from the correlation matrix that are all NaN (due to min_periods or no data)
+                        correlation_matrix.dropna(how='all', axis=0, inplace=True)
+                        correlation_matrix.dropna(how='all', axis=1, inplace=True)
 
-                        fig_corr = px.imshow(
-                            correlation_matrix_change,
-                            text_auto=True,
-                            aspect="auto",
-                            color_continuous_scale="RdBu",
-                            title=f'Correlation Heatmap of Food Prices (Last 1 Year)'
-                        )
-                        st.plotly_chart(fig_corr, use_container_width=True)
-
-                        # Smart Insights for Correlation
-                        st.markdown("##### Smart Insights from Correlation:")
-                        corr_series = correlation_matrix_change.unstack()
-                        
-                        # Drop self-correlations and duplicates (e.g., A-B is same as B-A)
-                        # We sort the index for consistent grouping
-                        valid_correlations = []
-                        for (item1, item2), value in corr_series.items():
-                            if item1 < item2 and not pd.isna(value): # Ensure no self-correlation and no duplicates, and not NaN
-                                valid_correlations.append(((item1, item2), value))
-                        
-                        if valid_correlations:
-                            valid_correlations.sort(key=lambda x: x[1], reverse=True)
-
-                            most_correlated_pair = valid_correlations[0][0]
-                            most_correlated_value = valid_correlations[0][1]
-
-                            # Find the least correlated (most negative)
-                            valid_correlations.sort(key=lambda x: x[1])
-                            least_correlated_pair = valid_correlations[0][0]
-                            least_correlated_value = valid_correlations[0][1]
-
-                            st.markdown(f"""
-                                * The food items most positively correlated over the last year are **{most_correlated_pair[0]}** and **{most_correlated_pair[1]}** with a correlation coefficient of **{most_correlated_value:.2f}**. This suggests their prices tend to move in the same direction.
-                                * The food items least correlated (most negatively) over the last year are **{least_correlated_pair[0]}** and **{least_correlated_pair[1]}** with a correlation coefficient of **{least_correlated_value:.2f}**. This indicates their prices tend to move in opposite directions, or have a very weak relationship.
-                            """)
+                        if correlation_matrix.empty or correlation_matrix.shape[0] < 2:
+                            st.info(f"Not enough robust overlapping price change data to calculate correlations for {selected_correlation_state} for the last year.")
                         else:
-                            st.info("Not enough pairs of food items with sufficient data to generate correlation insights.")
+                            fig_corr = px.imshow(
+                                correlation_matrix,
+                                text_auto=True,
+                                aspect="auto",
+                                color_continuous_scale="RdBu",
+                                title=f'Correlation Heatmap of Food Price Changes{title_suffix} (Last 1 Year)'
+                            )
+                            st.plotly_chart(fig_corr, use_container_width=True)
+
+                            # Smart Insights for Correlation
+                            st.markdown("##### Smart Insights from Correlation:")
+                            corr_series = correlation_matrix.unstack()
+
+                            # Drop self-correlations and duplicates (e.g., A-B is same as B-A)
+                            valid_correlations = []
+                            for (item1, item2), value in corr_series.items():
+                                if item1 < item2 and not pd.isna(value): # Ensure no self-correlation and no duplicates, and not NaN
+                                    valid_correlations.append(((item1, item2), value))
+
+                            if valid_correlations:
+                                valid_correlations.sort(key=lambda x: x[1], reverse=True)
+
+                                most_correlated_pair = valid_correlations[0][0]
+                                most_correlated_value = valid_correlations[0][1]
+
+                                # Find the least correlated (most negative)
+                                valid_correlations.sort(key=lambda x: x[1])
+                                least_correlated_pair = valid_correlations[0][0]
+                                least_correlated_value = valid_correlations[0][1]
+
+                                # Dynamically adjust the insight text based on selection
+                                correlation_location_text = f" in **{selected_correlation_state}**" if selected_correlation_state != 'Nationwide Average' else " nationwide"
+
+                                st.markdown(f"""
+                                    * The food items most positively correlated{correlation_location_text} over the last year are **{most_correlated_pair[0]}** and **{most_correlated_pair[1]}** with a correlation coefficient of **{most_correlated_value:.2f}**. This suggests their **price changes** tend to move in the same direction.
+                                    * The food items least correlated (most negatively){correlation_location_text} over the last year are **{least_correlated_pair[0]}** and **{least_correlated_pair[1]}** with a correlation coefficient of **{least_correlated_value:.2f}**. This indicates their **price changes** tend to move in opposite directions, or have a very weak relationship.
+                                    """)
+                            else:
+                                st.info(f"Not enough pairs of food items with sufficient **price change** data to generate correlation insights for {selected_correlation_state}.")
 
                 else:
-                    st.info("Not enough data to calculate correlations for the last 1 year for the selected food items.")
+                    st.info(f"Not enough data to calculate correlations for the last 1 year for the selected food items in {selected_correlation_state}.")
             else:
                 st.info("Load data first to see the correlation heatmap.")
 
